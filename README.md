@@ -1,4 +1,4 @@
-# Design Thinking AI 🚀
+# Design Thinking AI Agent 🚀
 
 Welcome to **Design Thinking AI**, an innovative, AI-powered application that reimagines the [design thinking process](https://www.interaction-design.org/literature/topics/design-thinking) through specialized **AI agents**. Built with [Streamlit](https://streamlit.io/), this interactive tool guides users—individuals or teams—through a structured, human-centered approach to problem-solving. By blending the creativity and empathy of design thinking with AI’s efficiency and intelligence, this project empowers you to address complex challenges and collaboratively craft impactful solutions.
 
