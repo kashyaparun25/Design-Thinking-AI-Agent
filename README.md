@@ -43,36 +43,35 @@ Built with [Streamlit](https://streamlit.io/), the app provides an intuitive int
 Below is a visual representation of the Design Thinking AI workflow:
 
 ```mermaid
-digraph G {
-    A[Challenge Setup] -> B[Empathize Stage];
-    B -> C[Define Stage];
-    C -> D[Ideate Stage];
-    D -> E[Prototype Stage];
-    E -> F[Test Stage];
-    F -> G[Process Management];
-    G -> H[Decision Documentation];
-    H -> I[Final Report];
+flowchart TD
+    A[Challenge Setup] --> B[Empathize Stage]
+    B --> C[Define Stage]
+    C --> D[Ideate Stage]
+    D --> E[Prototype Stage]
+    E --> F[Test Stage]
+    F --> G[Process Management]
+    G --> H[Decision Documentation]
+    H --> I[Final Report]
 
-    subgraph Agents {
-      B1[Empathy Researcher];
-      C1[Problem Definition Specialist];
-      D1[Innovation Facilitator];
-      E1[Prototyping Specialist];
-      F1[User Testing Coordinator];
-      G1[Process Manager];
-      H1[Reporting Agent];
-    }
+    subgraph Agents
+      B1[Empathy Researcher]
+      C1[Problem Definition Specialist]
+      D1[Innovation Facilitator]
+      E1[Prototyping Specialist]
+      F1[User Testing Coordinator]
+      G1[Process Manager]
+      H1[Reporting Agent]
+    end
 
-    B -> B1;
-    C -> C1;
-    D -> D1;
-    E -> E1;
-    F -> F1;
-    G -> G1;
-    H -> H1;
-}
+    B --> B1
+    C --> C1
+    D --> D1
+    E --> E1
+    F --> F1
+    G --> G1
+    H --> H1
 ```
-
+---
 *Note: You can view or edit this diagram using an online Mermaid editor.*
 
 ---
