@@ -157,7 +157,7 @@ pip install -r requirements.txt
 Clone the repository to your local machine:
 
 ```bash
-git clone https://github.com/yourusername/design-thinking-ai.git
+git clone https://github.com/kashyaparun25/Design-Thinking-AI-Agent.git
 cd design-thinking-ai
 ```
 
