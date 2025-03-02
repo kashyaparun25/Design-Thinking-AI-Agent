@@ -765,89 +765,10 @@ def display_agent_chat(stage_name, agent_role):
         with st.chat_message(message["role"], avatar=message.get("avatar", "👤" if message["role"] == "user" else "🧠")):
             st.markdown(message["content"])
     
-    # Chat input
-    user_input = st.chat_input(f"Ask {agent_role} a question or type 'regenerate' with instructions...", key=f"chat_input_{stage_name}")
-    
-    if user_input:
-        # Add user message to chat history
-        st.session_state.chat_history[stage_name].append({
-            "role": "user",
-            "content": user_input
-        })
-        
-        # Check if the user is asking for regeneration
-        if "redo" in user_input.lower() or "regenerate" in user_input.lower():
-            # Extract the instructions for regeneration
-            instructions = user_input.lower()
-            if "regenerate" in instructions:
-                instructions = instructions.split("regenerate", 1)[1].strip()
-            elif "redo" in instructions:
-                instructions = instructions.split("redo", 1)[1].strip()
-            
-            # Add agent response to chat history
-            st.session_state.chat_history[stage_name].append({
-                "role": "assistant",
-                "content": f"I'll regenerate the content with your instructions: '{instructions}'. Please wait...",
-                "avatar": "🧠"
-            })
-            
-            # Add the instructions to stage suggestions
-            if stage_name in st.session_state.stage_suggestions:
-                st.session_state.stage_suggestions[stage_name] += f"\n- {instructions}"
-            else:
-                st.session_state.stage_suggestions[stage_name] = f"- {instructions}"
-            
-            # Record the decision
-            if st.session_state.crew:
-                st.session_state.crew.decision_tracker.record_decision(
-                    stage=f"{stage_name.capitalize()} Regeneration",
-                    decision=f"Regenerating content with new instructions",
-                    rationale=f"User requested: {instructions}"
-                )
-            
-            # Remove the completed task to force regeneration
-            if stage_name in st.session_state.completed_tasks:
-                st.session_state.completed_tasks.pop(stage_name, None)
-            
-            # Rerun to trigger the regeneration
-            st.rerun()
-        else:
-            # Regular question - reference existing content
-            task_output = st.session_state.task_outputs.get(stage_name, "No output generated yet.")
-            
-            # Create a simple prompt using the LLM directly rather than running a full agent task
-            if st.session_state.crew and hasattr(st.session_state.crew, "llm"):
-                prompt = f"""
-                As a {agent_role}, I need to answer a question about my work on this design thinking project.
-                
-                USER QUESTION: {user_input}
-                
-                MY PREVIOUS WORK OUTPUT:
-                {task_output}
-                
-                Based ONLY on the information in my previous work output, how should I respond to this question?
-                Be conversational, helpful, and refer directly to the content I've already created.
-                Do NOT introduce new research or information not present in my work output.
-                """
-                
-                try:
-                    # Use direct LLM call instead of creating a new agent task
-                    response = st.session_state.crew.llm.call(prompt)
-                    agent_response = response
-                except Exception as e:
-                    agent_response = f"I'm sorry, I had trouble retrieving that information. Error: {str(e)}"
-            else:
-                agent_response = "I'm sorry, I can't access my previous work right now."
-            
-            # Add agent response to chat history
-            st.session_state.chat_history[stage_name].append({
-                "role": "assistant",
-                "content": agent_response,
-                "avatar": "🧠"
-            })
-        
-        # Rerun to update the UI immediately
-        st.rerun()
+    # We'll remove the chat_input from here since it can't be used inside tabs
+    # We'll set a session state variable to indicate which agent we're chatting with
+    st.session_state.current_chat_stage = stage_name
+    st.session_state.current_chat_agent = agent_role
 
 def generate_agent_response(user_input, stage_name, agent_role):
     """Generate a response from the agent based on user input"""
@@ -1359,6 +1280,98 @@ def run_design_thinking_process():
                                 
                                 st.error(f"Error executing task: {e}")
     
+                # After all the tabs, columns, and navigation controls
+
+                # Check if we're currently viewing a completed stage with an agent chat
+                if 'current_chat_stage' in st.session_state and 'current_chat_agent' in st.session_state:
+                    stage_name = st.session_state.current_chat_stage
+                    agent_role = st.session_state.current_chat_agent
+                    
+                    # Add the chat input at the root level
+                    user_input = st.chat_input(f"Ask {agent_role} a question or type 'regenerate' with instructions...", 
+                                            key="global_chat_input")
+                    
+                    if user_input:
+                        # Add user message to chat history
+                        st.session_state.chat_history[stage_name].append({
+                            "role": "user",
+                            "content": user_input
+                        })
+                        
+                        # Check if the user is asking for regeneration
+                        if "redo" in user_input.lower() or "regenerate" in user_input.lower():
+                            # Extract the instructions for regeneration
+                            instructions = user_input.lower()
+                            if "regenerate" in instructions:
+                                instructions = instructions.split("regenerate", 1)[1].strip()
+                            elif "redo" in instructions:
+                                instructions = instructions.split("redo", 1)[1].strip()
+                            
+                            # Add agent response to chat history
+                            st.session_state.chat_history[stage_name].append({
+                                "role": "assistant",
+                                "content": f"I'll regenerate the content with your instructions: '{instructions}'. Please wait...",
+                                "avatar": "🧠"
+                            })
+                            
+                            # Add the instructions to stage suggestions
+                            if stage_name in st.session_state.stage_suggestions:
+                                st.session_state.stage_suggestions[stage_name] += f"\n- {instructions}"
+                            else:
+                                st.session_state.stage_suggestions[stage_name] = f"- {instructions}"
+                            
+                            # Record the decision
+                            if st.session_state.crew:
+                                st.session_state.crew.decision_tracker.record_decision(
+                                    stage=f"{stage_name.capitalize()} Regeneration",
+                                    decision=f"Regenerating content with new instructions",
+                                    rationale=f"User requested: {instructions}"
+                                )
+                            
+                            # Remove the completed task to force regeneration
+                            if stage_name in st.session_state.completed_tasks:
+                                st.session_state.completed_tasks.pop(stage_name, None)
+                            
+                            # Rerun to trigger the regeneration
+                            st.rerun()
+                        else:
+                            # Regular question - reference existing content
+                            task_output = st.session_state.task_outputs.get(stage_name, "No output generated yet.")
+                            
+                            # Create a simple prompt using the LLM directly rather than running a full agent task
+                            if st.session_state.crew and hasattr(st.session_state.crew, "llm"):
+                                prompt = f"""
+                                As a {agent_role}, I need to answer a question about my work on this design thinking project.
+                                
+                                USER QUESTION: {user_input}
+                                
+                                MY PREVIOUS WORK OUTPUT:
+                                {task_output}
+                                
+                                Based ONLY on the information in my previous work output, how should I respond to this question?
+                                Be conversational, helpful, and refer directly to the content I've already created.
+                                Do NOT introduce new research or information not present in my work output.
+                                """
+                                
+                                try:
+                                    # Use direct LLM call instead of creating a new agent task
+                                    response = st.session_state.crew.llm.call(prompt)
+                                    agent_response = response
+                                except Exception as e:
+                                    agent_response = f"I'm sorry, I had trouble retrieving that information. Error: {str(e)}"
+                            else:
+                                agent_response = "I'm sorry, I can't access my previous work right now."
+                            
+                            # Add agent response to chat history
+                            st.session_state.chat_history[stage_name].append({
+                                "role": "assistant",
+                                "content": agent_response,
+                                "avatar": "🧠"
+                            })
+                        
+                        # Rerun to update the UI immediately
+                        st.rerun()
+
     # Navigation controls
     st.subheader("Navigation")
     
