@@ -1,7 +1,6 @@
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
-
 import streamlit as st
 import os
 import base64
@@ -411,7 +410,7 @@ def extract_text_from_pdf(pdf_file):
         return text
     except Exception as e:
         st.error(f"Error extracting text from PDF: {e}")
-        return "Error extracting text from PDF"
+        return f"[Error extracting PDF content: {str(e)}]"
 
 
 # Define task definitions globally so it can be accessed by multiple functions
@@ -865,23 +864,29 @@ def run_design_thinking_process():
                 )
                 
                 if uploaded_files:
-                    pdf_contents = []
-                    for uploaded_file in uploaded_files:
-                        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-                            tmp_file.write(uploaded_file.getvalue())
-                            tmp_file_path = tmp_file.name
+                    with st.status("Processing PDF files..."):
+                        pdf_contents = []
+                        for uploaded_file in uploaded_files:
+                            st.write(f"Processing: {uploaded_file.name}")
+                            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+                                tmp_file.write(uploaded_file.getvalue())
+                                tmp_file_path = tmp_file.name
+                            
+                            # Extract text from PDF
+                            pdf_text = extract_text_from_pdf(tmp_file_path)
+                            if not pdf_text.startswith('[Error'):
+                                pdf_contents.append(pdf_text)
+                                st.write(f"✅ Successfully processed {uploaded_file.name}")
+                            else:
+                                st.write(f"❌ Failed to process {uploaded_file.name}")
+                            
+                            # Delete temporary file
+                            os.unlink(tmp_file_path)
                         
-                        # Extract text from PDF
-                        pdf_text = extract_text_from_pdf(tmp_file_path)
-                        pdf_contents.append(pdf_text)
+                        # Store PDF contents for this stage
+                        st.session_state.uploaded_pdfs[stage] = pdf_contents
                         
-                        # Delete temporary file
-                        os.unlink(tmp_file_path)
-                    
-                    # Store PDF contents for this stage
-                    st.session_state.uploaded_pdfs[stage] = pdf_contents
-                    
-                    st.success(f"{len(uploaded_files)} PDF files processed successfully!")
+                        st.success(f"{len(pdf_contents)} PDF files processed successfully!")
             
             # Special handling for prototype stage - show solution selection checkboxes
             if stage == "prototype" and "ideate" in st.session_state.completed_tasks and "ideate" in st.session_state.task_outputs:
@@ -1075,6 +1080,39 @@ def run_design_thinking_process():
                 if not run_button_disabled and st.button("Run Task", key=f"run_{stage}"):
                     with st.spinner(f"Running {current_task_def['name']} task..."):
                         try:
+                            # Run manager briefing task first to ensure it understands the challenge
+                            manager_briefing_task = Task(
+                                description=f"""IMPORTANT: Review and understand the design challenge before coordinating other agents.
+
+                                DESIGN CHALLENGE: {st.session_state.project_input['challenge']}
+                                
+                                CONTEXT: {st.session_state.project_input['context']}
+                                
+                                CONSTRAINTS: {str(st.session_state.project_input['constraints'])}
+                                
+                                Your job is to ensure all agents focus their work specifically on this challenge, context, and constraints.
+                                When coordinating their work, continually remind them to refer back to these project parameters.
+                                """,
+                                expected_output="Confirmation of understanding the design challenge and plan for coordination",
+                                agent=st.session_state.crew.manager_agent
+                            )
+                            
+                            # Run the briefing task first
+                            briefing_crew = Crew(
+                                agents=[st.session_state.crew.manager_agent],
+                                tasks=[manager_briefing_task],
+                                verbose=True
+                            )
+                            
+                            briefing_result = briefing_crew.kickoff(
+                                inputs={
+                                    "project_input": st.session_state.project_input,
+                                    "challenge": st.session_state.project_input['challenge'],
+                                    "context": st.session_state.project_input['context'],
+                                    "constraints": st.session_state.project_input['constraints']
+                                }
+                            )
+                            
                             # Set context based on completed tasks
                             context_tasks = []
                             
@@ -1097,54 +1135,6 @@ def run_design_thinking_process():
                                         "output": st.session_state.task_outputs["empathize"]
                                     })
                             
-                            # Add other stage conditions as already defined in your code...
-                            
-                            # Add the context from previous tasks to the task description
-                            if context_tasks and len(context_tasks) > 0:
-                                task_description += "\n\nPREVIOUS STAGES OUTPUTS:\n"
-                                for context in context_tasks:
-                                    task_description += f"\n## {context['stage'].upper()} STAGE OUTPUT:\n{context['output']}\n"
-                            
-                            # Ensure the design challenge, context, and constraints are prominently included
-                            task_description = f"""IMPORTANT: Focus on this specific design challenge, context, and constraints.
-
-                DESIGN CHALLENGE: {st.session_state.project_input['challenge']}
-
-                CONTEXT: {st.session_state.project_input['context']}
-
-                CONSTRAINTS: {str(st.session_state.project_input['constraints'])}
-
-                TASK INSTRUCTIONS:
-                {task_description}
-                """
-                            
-                            # Now create the task with the updated description
-                            task = Task(
-                                description=task_description,
-                                expected_output=current_task_def["expected_output"],
-                                agent=current_task_def["agent"]
-                            )
-                            
-                            
-                            # Define context based on design thinking flow
-                            if stage == "define" and "empathize" in st.session_state.completed_tasks:
-                                context_tasks.append({
-                                    "stage": "empathize",
-                                    "output": st.session_state.task_outputs["empathize"]
-                                })
-                                
-                            elif stage == "ideate":
-                                if "define" in st.session_state.completed_tasks:
-                                    context_tasks.append({
-                                        "stage": "define",
-                                        "output": st.session_state.task_outputs["define"]
-                                    })
-                                if "empathize" in st.session_state.completed_tasks:
-                                    context_tasks.append({
-                                        "stage": "empathize",
-                                        "output": st.session_state.task_outputs["empathize"]
-                                    })
-                                
                             elif stage == "prototype":
                                 if "ideate" in st.session_state.completed_tasks:
                                     context_tasks.append({
@@ -1156,11 +1146,6 @@ def run_design_thinking_process():
                                         "stage": "define",
                                         "output": st.session_state.task_outputs["define"]
                                     })
-                                if "selected_solutions" in st.session_state and "prototype" in st.session_state.selected_solutions:
-                                                                    
-                                    selected_sols = st.session_state.selected_solutions["prototype"]
-                                    if selected_sols:
-                                        task_description += f"\n\nIMPORTANT: You MUST create detailed prototype descriptions for ALL {len(selected_sols)} selected solutions listed above. Ensure each solution is given equal attention and detail."
 
                             elif stage == "test":
                                 if "prototype" in st.session_state.completed_tasks:
@@ -1173,10 +1158,6 @@ def run_design_thinking_process():
                                         "stage": "ideate",
                                         "output": st.session_state.task_outputs["ideate"]
                                     })
-                                if "selected_test_solutions" in st.session_state and stage in st.session_state.selected_test_solutions:
-                                    selected_tests = st.session_state.selected_test_solutions[stage]
-                                    if selected_tests:
-                                        task_description += f"\n\nIMPORTANT: You MUST create comprehensive testing protocols for ALL {len(selected_tests)} selected prototypes listed above. Each prototype must have its own testing approach with equal detail and consideration."
                                 
                             elif stage == "decisions":
                                 # Add all previous tasks as context
@@ -1194,6 +1175,82 @@ def run_design_thinking_process():
                                             "stage": name,
                                             "output": st.session_state.task_outputs[name]
                                         })
+                            
+                            # Add the context from previous tasks to the task description
+                            # Add the context from previous tasks to the task description
+                            if context_tasks and len(context_tasks) > 0:
+                                task_description += "\n\nPREVIOUS STAGES OUTPUTS:\n"
+                                for context in context_tasks:
+                                    task_description += f"\n## {context['stage'].upper()} STAGE OUTPUT:\n{context['output']}\n"
+
+                            # Add PDF content to the task description
+                            pdf_contents = st.session_state.uploaded_pdfs.get(stage, [])
+                            if pdf_contents and len(pdf_contents) > 0:
+                                task_description += "\n\nREFERENCE PDF DOCUMENTS:\n"
+                                for i, content in enumerate(pdf_contents):
+                                    # Limit content length to avoid token issues
+                                    truncated_content = content[:8000] + "..." if len(content) > 8000 else content
+                                    task_description += f"\nPDF DOCUMENT {i+1}:\n{truncated_content}\n\n"
+                            
+                            # Ensure the design challenge, context, and constraints are prominently included
+                            task_description = f"""IMPORTANT: Focus on this specific design challenge, context, and constraints.
+
+                            DESIGN CHALLENGE: {st.session_state.project_input['challenge']}
+
+                            CONTEXT: {st.session_state.project_input['context']}
+
+                            CONSTRAINTS: {str(st.session_state.project_input['constraints'])}
+
+                            TASK INSTRUCTIONS:
+                            {task_description}
+                            """
+                            
+                            # Special handling for prototype stage - make sure all selected solutions are emphasized
+                            if stage == "prototype" and "selected_solutions" in st.session_state and "prototype" in st.session_state.selected_solutions:
+                                selected_sols = st.session_state.selected_solutions["prototype"]
+                                if selected_sols:
+                                    task_description += f"""
+                                    \n\nIMPORTANT: You MUST create detailed prototype descriptions for ALL {len(selected_sols)} 
+                                    selected solutions listed below. Each solution must be given equal attention and detail.
+                                    
+                                    SELECTED SOLUTIONS TO PROTOTYPE:
+                                    {chr(10).join([f"{i+1}. {sol}" for i, sol in enumerate(selected_sols)])}
+                                    
+                                    For each solution above, provide:
+                                    - Detailed prototype specifications
+                                    - Core features
+                                    - Development approach
+                                    - Implementation considerations
+                                    
+                                    DO NOT focus on just one solution - you must prototype ALL {len(selected_sols)} selected solutions.
+                                    """
+                            
+                            # Special handling for test stage - make sure all selected prototypes are emphasized
+                            if stage == "test" and "selected_test_solutions" in st.session_state and stage in st.session_state.selected_test_solutions:
+                                selected_tests = st.session_state.selected_test_solutions[stage]
+                                if selected_tests:
+                                    task_description += f"""
+                                    \n\nIMPORTANT: You MUST create comprehensive testing protocols for ALL {len(selected_tests)} 
+                                    selected prototypes listed below. Each prototype must have its own detailed testing approach.
+                                    
+                                    SELECTED PROTOTYPES TO TEST:
+                                    {chr(10).join([f"{i+1}. {test}" for i, test in enumerate(selected_tests)])}
+                                    
+                                    For each prototype above, provide:
+                                    - Specific testing methodology
+                                    - User feedback collection approach
+                                    - Success metrics
+                                    - Acceptance criteria
+                                    
+                                    DO NOT focus on just one prototype - you must test ALL {len(selected_tests)} selected prototypes.
+                                    """
+                            
+                            # Now create the task with the updated description
+                            task = Task(
+                                description=task_description,
+                                expected_output=current_task_def["expected_output"],
+                                agent=current_task_def["agent"]
+                            )
                             
                             # Get PDF contents for this stage
                             pdf_contents = st.session_state.uploaded_pdfs.get(stage, [])
@@ -1236,7 +1293,7 @@ def run_design_thinking_process():
                                         "context": st.session_state.project_input['context'],
                                         "constraints": st.session_state.project_input['constraints'],
                                         "context_tasks": context_tasks if context_tasks else [],
-                                        "pdf_contents": pdf_contents if pdf_contents else []
+                                        "pdf_contents": pdf_contents
                                     }
                                 )
                                 st.write("Task completed successfully!")
@@ -1278,98 +1335,131 @@ def run_design_thinking_process():
 
                         except Exception as e:
                                 
-                                st.error(f"Error executing task: {e}")
+                            st.error(f"Error executing task: {e}")
     
-                # After all the tabs, columns, and navigation controls
+                
+            
+    # Get the task definitions and define task order
+    task_definitions = get_task_definitions(st.session_state)
+    task_order = list(task_definitions.keys())
 
-                # Check if we're currently viewing a completed stage with an agent chat
-                if 'current_chat_stage' in st.session_state and 'current_chat_agent' in st.session_state:
-                    stage_name = st.session_state.current_chat_stage
-                    agent_role = st.session_state.current_chat_agent
+    # Create separate chat containers for each stage
+    chat_containers = {}
+    for tab_index, stage in enumerate(task_order):
+        chat_containers[stage] = st.container(key=f"chat_container_{stage}_{tab_index}")
+
+    # Later in the chat logic section:
+    if 'current_chat_stage' in st.session_state and 'current_chat_agent' in st.session_state:
+        stage_name = st.session_state.current_chat_stage
+        agent_role = st.session_state.current_chat_agent
+        
+        # Get the appropriate chat container for this stage
+        chat_container = chat_containers.get(stage_name)
+        
+        if chat_container and stage_name in st.session_state.completed_tasks:
+            with chat_container:
+                # Create a unique hash that includes the tab iteration index
+                import hashlib
+                current_tab = st.session_state.active_tab_index
+                tab_iteration = task_order.index(stage_name)
+                
+                # Include more components in the hash for increased uniqueness
+                hash_input = f"{stage_name}_{current_tab}_{agent_role}_{tab_iteration}"
+                unique_hash = hashlib.md5(hash_input.encode()).hexdigest()[:8]
+                
+                # Display who you're chatting with
+                st.write(f"💬 Chat with {agent_role}")
+                
+                # Create the chat input with the unique key
+                user_input = st.chat_input(
+                    f"Ask a question or type 'regenerate' with instructions...",
+                    key=f"chat_input_{stage_name}_{tab_iteration}_{unique_hash}"
+                )
+                        
+                # Process user input
+                if user_input:
+                    # Add user message to chat history
+                    if stage_name not in st.session_state.chat_history:
+                        st.session_state.chat_history[stage_name] = []
+                        
+                    st.session_state.chat_history[stage_name].append({
+                        "role": "user",
+                        "content": user_input
+                    })
                     
-                    # Add the chat input at the root level
-                    user_input = st.chat_input(f"Ask {agent_role} a question or type 'regenerate' with instructions...", 
-                                            key="global_chat_input")
-                    
-                    if user_input:
-                        # Add user message to chat history
+                    # Check if regeneration request
+                    if "redo" in user_input.lower() or "regenerate" in user_input.lower():
+                        # Process regeneration request
+                        # (your existing regeneration code)
+                        
+                        # Extract instructions
+                        instructions = user_input.lower()
+                        if "regenerate" in instructions:
+                            instructions = instructions.split("regenerate", 1)[1].strip()
+                        elif "redo" in instructions:
+                            instructions = instructions.split("redo", 1)[1].strip()
+                        
+                        # Add agent response
                         st.session_state.chat_history[stage_name].append({
-                            "role": "user",
-                            "content": user_input
+                            "role": "assistant",
+                            "content": f"I'll regenerate the content with your instructions: '{instructions}'. Please wait...",
+                            "avatar": "🧠"
                         })
                         
-                        # Check if the user is asking for regeneration
-                        if "redo" in user_input.lower() or "regenerate" in user_input.lower():
-                            # Extract the instructions for regeneration
-                            instructions = user_input.lower()
-                            if "regenerate" in instructions:
-                                instructions = instructions.split("regenerate", 1)[1].strip()
-                            elif "redo" in instructions:
-                                instructions = instructions.split("redo", 1)[1].strip()
-                            
-                            # Add agent response to chat history
-                            st.session_state.chat_history[stage_name].append({
-                                "role": "assistant",
-                                "content": f"I'll regenerate the content with your instructions: '{instructions}'. Please wait...",
-                                "avatar": "🧠"
-                            })
-                            
-                            # Add the instructions to stage suggestions
-                            if stage_name in st.session_state.stage_suggestions:
-                                st.session_state.stage_suggestions[stage_name] += f"\n- {instructions}"
-                            else:
-                                st.session_state.stage_suggestions[stage_name] = f"- {instructions}"
-                            
-                            # Record the decision
-                            if st.session_state.crew:
-                                st.session_state.crew.decision_tracker.record_decision(
-                                    stage=f"{stage_name.capitalize()} Regeneration",
-                                    decision=f"Regenerating content with new instructions",
-                                    rationale=f"User requested: {instructions}"
-                                )
-                            
-                            # Remove the completed task to force regeneration
-                            if stage_name in st.session_state.completed_tasks:
-                                st.session_state.completed_tasks.pop(stage_name, None)
-                            
-                            # Rerun to trigger the regeneration
-                            st.rerun()
+                        # Update suggestions
+                        if stage_name in st.session_state.stage_suggestions:
+                            st.session_state.stage_suggestions[stage_name] += f"\n- {instructions}"
                         else:
-                            # Regular question - reference existing content
-                            task_output = st.session_state.task_outputs.get(stage_name, "No output generated yet.")
-                            
-                            # Create a simple prompt using the LLM directly rather than running a full agent task
-                            if st.session_state.crew and hasattr(st.session_state.crew, "llm"):
-                                prompt = f"""
-                                As a {agent_role}, I need to answer a question about my work on this design thinking project.
-                                
-                                USER QUESTION: {user_input}
-                                
-                                MY PREVIOUS WORK OUTPUT:
-                                {task_output}
-                                
-                                Based ONLY on the information in my previous work output, how should I respond to this question?
-                                Be conversational, helpful, and refer directly to the content I've already created.
-                                Do NOT introduce new research or information not present in my work output.
-                                """
-                                
-                                try:
-                                    # Use direct LLM call instead of creating a new agent task
-                                    response = st.session_state.crew.llm.call(prompt)
-                                    agent_response = response
-                                except Exception as e:
-                                    agent_response = f"I'm sorry, I had trouble retrieving that information. Error: {str(e)}"
-                            else:
-                                agent_response = "I'm sorry, I can't access my previous work right now."
-                            
-                            # Add agent response to chat history
-                            st.session_state.chat_history[stage_name].append({
-                                "role": "assistant",
-                                "content": agent_response,
-                                "avatar": "🧠"
-                            })
+                            st.session_state.stage_suggestions[stage_name] = f"- {instructions}"
                         
-                        # Rerun to update the UI immediately
+                        # Record decision
+                        if st.session_state.crew:
+                            st.session_state.crew.decision_tracker.record_decision(
+                                stage=f"{stage_name.capitalize()} Regeneration",
+                                decision=f"Regenerating content with new instructions",
+                                rationale=f"User requested: {instructions}"
+                            )
+                        
+                        # Reset the task
+                        if stage_name in st.session_state.completed_tasks:
+                            st.session_state.completed_tasks.pop(stage_name, None)
+                        
+                        st.rerun()
+                    else:
+                        # Handle regular question
+                        task_output = st.session_state.task_outputs.get(stage_name, "No output generated yet.")
+                        
+                        # Create prompt
+                        if st.session_state.crew and hasattr(st.session_state.crew, "llm"):
+                            prompt = f"""
+                            As a {agent_role}, I need to answer a question about my work on this design thinking project.
+                            
+                            USER QUESTION: {user_input}
+                            
+                            MY PREVIOUS WORK OUTPUT:
+                            {task_output}
+                            
+                            Based ONLY on the information in my previous work output, how should I respond to this question?
+                            Be conversational, helpful, and refer directly to the content I've already created.
+                            Do NOT introduce new research or information not present in my work output.
+                            """
+                            
+                            try:
+                                # Call LLM
+                                response = st.session_state.crew.llm.call(prompt)
+                                agent_response = response
+                            except Exception as e:
+                                agent_response = f"I'm sorry, I had trouble retrieving that information. Error: {str(e)}"
+                        else:
+                            agent_response = "I'm sorry, I can't access my previous work right now."
+                        
+                        # Add to chat history
+                        st.session_state.chat_history[stage_name].append({
+                            "role": "assistant",
+                            "content": agent_response,
+                            "avatar": "🧠"
+                        })
+                        
                         st.rerun()
 
     # Navigation controls
