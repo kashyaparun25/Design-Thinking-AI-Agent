@@ -1346,7 +1346,7 @@ def run_design_thinking_process():
     # Create separate chat containers for each stage
     chat_containers = {}
     for tab_index, stage in enumerate(task_order):
-        chat_containers[stage] = st.container(key=f"chat_container_{stage}_{tab_index}")
+        chat_containers[stage] = st.container()
 
     # Later in the chat logic section:
     if 'current_chat_stage' in st.session_state and 'current_chat_agent' in st.session_state:
