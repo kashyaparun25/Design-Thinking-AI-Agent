@@ -8,3 +8,4 @@ langchain-community<0.4.0
 langchain-openai<0.3.0
 tiktoken<0.8.0
 PyPDF2
+google-generativeai
