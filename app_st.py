@@ -1,4 +1,4 @@
-__import__('pysqlite3')
+ __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import streamlit as st
@@ -7,9 +7,12 @@ import base64
 import tempfile
 from datetime import datetime
 from typing import Dict, Any, List, Optional
-
+from streamlit.components.v1 import html
 from crewai import Agent, Task, Crew, Process, LLM
-from crewai_tools import SerperDevTool
+from crewai_tools import SerperDevTool, RagTool, PDFSearchTool
+import tempfile
+
+
 
 # For simplicity, we'll include the classes here for a complete example
 class DecisionTracker:
@@ -44,7 +47,7 @@ class DecisionTracker:
 class DesignThinkingCrew:
     """Design Thinking crew for user-centered problem solving with feedback loops"""
     
-    def __init__(self, api_keys: Dict[str, str], model_name: str = "gemini/gemini-2.0-flash-thinking-exp-01-21"):
+    def __init__(self, api_keys: Dict[str, str], model_name: str = "gemini/gemini-2.0-flash"):
         """Initialize the Design Thinking Crew with necessary API keys and model selection"""
         # Set Serper API key in environment
         os.environ["SERPER_API_KEY"] = api_keys.get("serper")
@@ -68,89 +71,124 @@ class DesignThinkingCrew:
                 api_key=api_keys.get("openai")
             )
         
+
+
         # Initialize decision tracker
         self.decision_tracker = DecisionTracker()
 
         # Initialize tools
         self.search_tool = SerperDevTool(api_key=api_keys.get("serper"))
-        
+
+        # Initialize the RAG tool for design thinking knowledge
+        self.design_thinking_knowledge = RagTool(
+            config=dict(
+                llm=dict(
+                    provider="google",  # Using Google (Gemini) as default
+                    config=dict(
+                        model="gemini/gemini-2.0-flash",
+                        api_key=api_keys.get("gemini")
+                    ),
+                ),
+                embedder=dict(
+                    provider="google",
+                    config=dict(
+                        model="gemini-embedding-exp-03-07",
+                        task_type="retrieval_document",
+                    ),
+                ),
+            ),
+            files=["The Design Thinking Playbook.pdf"],  # This will be set dynamically
+            name="Design Thinking Guide",
+            description="A comprehensive guide for design thinking methodology and best practices"
+        )
+
+
+               
         # Initialize agents with refined definitions
         self.empathize_agent = Agent(
             role="Empathy Researcher",
-            goal="Gather deep qualitative insights about user needs and pain points to build a foundation for user-centered design",
-            backstory="""You are an expert ethnographic researcher with 15 years of experience in 
-            understanding user needs through interviews, surveys, observations, and digital analytics. 
-            You excel at identifying underlying pain points, user motivations, and unspoken needs. 
-            Your specialty is creating comprehensive empathy maps that bring user perspectives to life 
-            and reveal unexpected insights. You're particularly skilled at researching diverse user groups 
-            and uncovering cross-cultural nuances that others might miss.""",
+            goal="Uncover the deepest human needs, pain points, and motivations through immersive research to build genuine empathy and establish a foundation for user-centered solutions",
+            backstory="""You are a world-class ethnographic researcher who has led user research for groundbreaking products at IDEO, IBM Design, 
+            and top innovation consultancies. With formal training in anthropology and behavioral psychology, you've developed techniques that 
+            reveal what users truly need—not just what they say they want. You've masterfully conducted hundreds of contextual inquiries, 
+            in-depth interviews, and immersive observations across diverse cultures and domains. You're known for your remarkable ability to 
+            spot behavioral patterns that others miss and to extract insights from seemingly ordinary interactions. Your empathy maps and user 
+            journey visualizations have become standard tools in the field. You approach each conversation with genuine curiosity, asking probing 
+            questions that reveal underlying motivations rather than surface-level preferences. You believe deeply that empathy is 
+            the foundation of all meaningful innovation.""",
             tools=[self.search_tool],
             verbose=True,
             llm=self.llm,
-            allow_delegation=True
+            allow_delegation=False
         )
         
         self.define_agent = Agent(
             role="Problem Definition Specialist",
-            goal="Synthesize research insights into clear, actionable problem statements that capture the essence of user needs",
-            backstory="""You are a master analyst with a unique ability to identify patterns in qualitative data
-            and transform them into precise problem definitions. With a background in both data science and
-            psychology, you can translate user needs into actionable problem statements that get to the heart
-            of the issue. You excel at creating detailed user personas that feel like real people, complete with
-            motivations, frustrations, and goals. Your problem definitions have guided numerous successful 
-            products because they balance specificity with opportunity for innovation.""",
-            tools=[self.search_tool],  # Added internet search tool
+            goal="Transform complex research data into laser-focused problem statements that reveal core user needs, challenge assumptions, and create a foundation for breakthrough innovation",
+            backstory="""You are a renowned synthesis expert who has led problem framing workshops at Stanford's d.school and helped Fortune 100 companies 
+            redefine seemingly intractable challenges into breakthrough opportunities. Your command of frameworks like Jobs-to-be-Done and Outcome-Driven 
+            Innovation has helped teams see beyond symptoms to root causes. You've developed a reputation for ruthlessly cutting through informational 
+            noise to identify the essential problem worth solving. Your ability to craft "How Might We" statements has launched numerous successful 
+            products by framing challenges at exactly the right level—neither too broad nor too narrow. You've created detailed user personas and journey 
+            maps that have become legendary in the field for their depth and accuracy. Teams regularly cite your problem definitions as the pivotal 
+            moment that redirected their efforts toward truly meaningful solutions. You believe that a well-defined problem is already half-solved.""",
+            tools=[self.search_tool, self.design_thinking_knowledge],  # Added internet search tool
             verbose=True,
             llm=self.llm,
-            allow_delegation=True
+            allow_delegation=False
         )
         
         self.ideate_agent = Agent(
             role="Innovation Facilitator",
-            goal="Generate innovative, user-centered solutions through structured creative techniques and lateral thinking",
-            backstory="""You are a world-class innovation expert who has mastered the art of ideation.
-            Having facilitated hundreds of successful brainstorming sessions across industries, you know
-            exactly how to apply techniques like SCAMPER, mind mapping, and analogical thinking to
-            generate breakthrough ideas. You're known for your ability to balance wild creativity with
-            practical constraints, and for pushing teams beyond obvious solutions to discover truly
-            innovative approaches. Your specialty is connecting seemingly unrelated concepts to create
-            novel solutions that address user needs in unexpected ways.""",
-            tools=[self.search_tool],  # Added internet search tool
+            goal="Orchestrate breakthrough ideation processes that generate radical, diverse solutions through creative tension, cognitive diversity, and systematic exploration of possibility spaces",
+            backstory="""You are an internationally recognized innovation expert who has facilitated ideation sessions at LEGO's Creative Play Lab,
+            Google X, and top innovation hubs worldwide. Your background spans design, engineering, and creative psychology, giving you a unique 
+            approach to idea generation. You've mastered dozens of ideation techniques beyond common brainstorming—from systematic inventive thinking
+            and biomimicry to SCAMPER, design analogies, and provocation techniques. You've helped teams generate over 10,000 concepts across industries, 
+            many evolving into market-leading products. You excel at creating the psychological safety needed for wild ideas while maintaining the 
+            productive tension that drives innovative thinking. You know precisely when to diverge broadly and when to begin converging toward actionable 
+            concepts. You've developed proprietary methods for idea evaluation that balance feasibility, viability, and desirability. 
+            You believe creativity is both art and science—requiring both spontaneous connections and rigorous exploration of solution spaces.""",
+            tools=[self.search_tool, self.design_thinking_knowledge],  # Added internet search tool
             verbose=True,
             llm=self.llm,
-            allow_delegation=True
+            allow_delegation=False
         )
         
         self.prototype_agent = Agent(
             role="Prototyping Specialist",
-            goal="Transform abstract ideas into tangible prototypes that effectively communicate the solution concept",
-            backstory="""You are a versatile prototyping expert who knows how to bring ideas to life
-            in the most appropriate fidelity for each stage of development. With experience in both
-            physical and digital prototyping across multiple industries, you understand exactly what
-            level of detail is needed to test key assumptions. You excel at defining core features and
-            planning iterative development approaches that maximize learning while minimizing resource
-            use. Your prototypes are renowned for clearly communicating the essence of an idea while
-            being flexible enough to incorporate feedback.""",
-            tools=[self.search_tool],  # Added internet search tool
+            goal="Transform abstract concepts into tangible, testable experiences using the minimal resources needed to validate critical assumptions and communicate the essence of solutions",
+            backstory="""You are a prototype virtuoso who has led rapid prototyping labs at Frog Design, Apple, and MIT Media Lab. 
+            Your diverse background spans industrial design, software development, and experience design, allowing you to prototype across physical, 
+            digital, and service domains. You've pioneered the philosophy of "minimum viable fidelity"—creating prototypes with precisely the right level 
+            of polish needed to test key assumptions without wasting resources. Your prototyping matrix framework helps teams determine whether to build 
+            paper prototypes, digital wireframes, functional mockups, or experience simulations based on what they need to learn. You've developed a 
+            reputation for ingenious resource utilization—turning ordinary materials into compelling prototypes in hours rather than weeks. 
+            You've trained teams to iterate rapidly through multiple prototype generations, each testing specific aspects of the solution. 
+            You believe prototypes are not just validation tools but boundary objects that create shared understanding across stakeholders with 
+            different perspectives.""",
+            tools=[self.search_tool, self.design_thinking_knowledge],  # Added internet search tool
             verbose=True,
             llm=self.llm,
-            allow_delegation=True
+            allow_delegation=False  # Prototyping agent cannot delegate tasks
         )
         
         self.test_agent = Agent(
             role="User Testing Coordinator",
-            goal="Design and conduct rigorous user testing to validate solutions and gather actionable insights for refinement",
-            backstory="""You are a testing methodologist with expertise in both qualitative and
-            quantitative user research methods. Having conducted thousands of user tests across
-            digital and physical products, you know exactly how to design testing protocols that
-            reveal genuine user reactions rather than confirmation bias. You excel at analyzing
-            feedback patterns to extract actionable insights, and your testing approaches are known
-            for efficiently validating the most critical assumptions first. You have a talent for
-            creating testing environments where users feel comfortable providing honest feedback.""",
-            tools=[self.search_tool],  # Added internet search tool
+            goal="Design rigorous yet flexible testing protocols that extract maximum learning from user interactions, validate critical assumptions, and guide iterative refinement toward solutions users truly value",
+            backstory="""You are a renowned testing methodologist who has led user research labs at Nielsen Norman Group, established testing protocols 
+            for breakthrough products at Tesla, and taught evaluation methods at Carnegie Mellon's HCI program. Your dual background in experimental 
+            psychology and interaction design gives you unique insight into how to design tests that yield meaningful data. You've mastered diverse 
+            testing approaches—from guerrilla testing and remote unmoderated studies to controlled experiments and longitudinal field studies. 
+            You're known for your ability to craft testing protocols that extract maximum insight with minimal interference in natural user behavior. 
+            You've developed sophisticated frameworks for analyzing qualitative feedback that reveal patterns invisible to most observers. Your ability 
+            to distinguish between what users say, what they do, and what they truly need has saved countless teams from building solutions based on 
+            misleading feedback. You believe that testing is not a validation exercise but a learning journey, and you excel at helping teams embrace 
+            and act on uncomfortable findings rather than explaining them away.""",
+            tools=[self.search_tool, self.design_thinking_knowledge],  # Added internet search tool
             verbose=True,
             llm=self.llm,
-            allow_delegation=True
+            allow_delegation=False
         )
         
         # Create the manager agent
@@ -174,18 +212,20 @@ class DesignThinkingCrew:
         
         self.reporting_agent = Agent(
             role="Design Process Reporter",
-            goal="Create comprehensive, clear documentation that captures the entire design thinking journey and its outcomes",
-            backstory="""You are an expert technical writer and design documentarian with a gift for
-            translating complex design processes into clear, engaging narratives. With experience
-            documenting design projects across industries, you know exactly how to structure reports
-            that highlight key insights, decisions, and outcomes at each stage. You excel at creating
-            visually appealing documentation that balances detail with readability, ensuring that 
-            stakeholders at all levels can understand the process and its value. Your specialty is
-            crafting documentation that serves both as a record of the project and as a resource
-            for future design initiatives.""",
+            goal="Craft compelling, evidence-based narratives that document the design journey, communicate insights with crystal clarity, and translate complex design decisions into stakeholder-appropriate documentation",
+            backstory="""You are an acclaimed design documentarian who has created case studies for the Design Management Institute, documented 
+            breakthrough innovation processes at Mayo Clinic's Center for Innovation, and authored respected publications on design communication. 
+            Your background in both design thinking and data visualization gives you a unique ability to tell stories that balance qualitative insights 
+            with quantitative evidence. You've pioneered innovative documentation formats that capture the messiness of real design processes while 
+            providing clear throughlines that stakeholders can follow. Your reports have become known for their strategic use of visuals, quotes, and 
+            artifacts that bring the design journey to life. You've developed frameworks for communicating design decisions that resonate with different 
+            stakeholder perspectives—from C-suite executives and engineering teams to marketing departments and end users. Your documentation has 
+            repeatedly secured additional funding for projects by clearly connecting design decisions to business outcomes. You believe that great 
+            design work is only as valuable as its communication, and you're passionate about creating living documents that continue to provide value 
+            long after the initial design phase.""",
             verbose=True,
             llm=self.llm,
-            allow_delegation=True
+            allow_delegation=False
         )
 
     def generate_challenge(self, domain: str, context: str = None, constraints: List[str] = None) -> Dict[str, Any]:
@@ -211,7 +251,7 @@ class DesignThinkingCrew:
             Your specialty is crafting "How might we" statements that are specific enough to
             guide work but open enough to allow for innovation. You're known for your ability to
             identify the core user needs hidden within complex problem spaces.""",
-            tools=[self.search_tool],  # Add search tool to research the domain if needed
+            tools=[self.search_tool, self.design_thinking_knowledge],  # Add search tool to research the domain if needed
             verbose=True,
             llm=self.llm
         )
@@ -330,11 +370,26 @@ class DesignThinkingCrew:
             "Design Process Reporter": self.reporting_agent
         }
         
-    def run_task(self, task_name, task, project_input, context_tasks=None, pdf_contents=None):
-        """Run a single task and return its result"""
+def run_task(self, task_name, task, project_input, context_tasks=None, pdf_contents=None):
+    """Run a single task and return its result"""
+    try:
         if context_tasks:
             task.context = context_tasks
+
+            # Enhance task description with design thinking methodology prompt
+            task.description = f"""IMPORTANT: Reference the design thinking guide to inform your approach.
+            Consider multiple methodologies and frameworks when addressing this challenge.
+            Justify your chosen approaches based on established design thinking principles.
             
+            {task.description}
+            
+            When developing your response:
+            1. Review relevant methodologies from the design thinking guide
+            2. Consider multiple alternative approaches
+            3. Select and justify methods based on the specific context
+            4. Structure your output according to proven frameworks
+            """
+
         # Incorporate PDF contents into task description if available
         if pdf_contents and len(pdf_contents) > 0:
             pdf_context = "\n\nREFERENCE PDF DOCUMENTS:\n"
@@ -345,59 +400,58 @@ class DesignThinkingCrew:
             
             task.description += pdf_context
         
-        # Make sure the tool is properly initialized
-        search_tool = SerperDevTool(api_key=os.environ.get("SERPER_API_KEY", ""))
-        
-        # Re-initialize the agent with the tool to ensure it's using it properly
-        agent_copy = Agent(
-            role=task.agent.role,
-            goal=task.agent.goal,
-            backstory=task.agent.backstory,
-            verbose=True,
-            tools=[search_tool],  # Explicitly provide the tool
-            llm=self.llm
-        )
-        
-        # Create a temporary crew for this single task
+        # Create temporary crew for this task
         temp_crew = Crew(
-            agents=[agent_copy],  # Use the copy with explicit tool
+            agents=[task.agent],
             tasks=[task],
             verbose=True
         )
         
         # Add extensive error handling and validation
         try:
-            result = temp_crew.kickoff(inputs=project_input)
-            
-            # Validate result
-            if not result:
-                st.error("Task execution returned no result")
-                # Create a fallback result
-                from crewai.tasks.task_output import TaskOutput
-                result = TaskOutput(
-                    task_id=task_name,
-                    raw="Task execution failed - please try again",
-                    agent=task.agent.role,
-                    description=task.description
-                )
-                    
-            # Ensure result has required attributes
-            if not hasattr(result, 'raw'):
-                st.error("Task result missing required attributes")
-                result.raw = "Task execution produced invalid output format - please try again"
-                    
+            result = temp_crew.kickoff(
+                inputs={
+                    "project_input": project_input,
+                    "context_tasks": context_tasks if context_tasks else [],
+                    "pdf_contents": pdf_contents,
+                    "reference_guide": True  # Flag to indicate design thinking guide should be referenced
+                }
+            )    
             return result
-                
+            
         except Exception as e:
-            st.error(f"Error during task execution: {str(e)}")
-            # Create error result
-            from crewai.tasks.task_output import TaskOutput
-            return TaskOutput(
-                task_id=task_name,
-                raw=f"Task execution failed with error: {str(e)}",
-                agent=task.agent.role,
-                description=task.description
-            )
+            if "Invalid response from LLM" in str(e) or "empty response" in str(e):
+                # Try with simplified prompt
+                simplified_task = Task(
+                    description=f"""SIMPLIFIED RETRY - Previous attempt failed. Please provide a basic response for:
+                    
+                    CHALLENGE: {project_input['challenge']}
+                    TASK: {task.description[:500]}... (truncated)
+                    
+                    Focus on core requirements for {task_name} stage.
+                    """,
+                    expected_output=task.expected_output,
+                    agent=task.agent
+                )
+                
+                result = temp_crew.kickoff(inputs=project_input)
+                
+                if result and hasattr(result, 'raw') and result.raw:
+                    return result
+                else:
+                    raise ValueError(f"Failed to get valid response after retry for {task_name}")
+            else:
+                raise e
+                
+    except Exception as e:
+        st.error(f"Error executing task: {str(e)}")
+        from crewai.tasks.task_output import TaskOutput
+        return TaskOutput(
+            task_id=task_name,
+            raw=f"Task execution failed: {str(e)}. Please try again or contact support if the issue persists.",
+            agent=task.agent.role,
+            description=task.description
+        )
 # Helper functions for file handling
 def extract_text_from_pdf(pdf_file):
     """Extract text from a PDF file"""
@@ -421,80 +475,361 @@ def get_task_definitions(session_state):
     
     return {
         "empathize": {
-            "name": "Empathize",
-            "description": f"""Conduct user research for: {session_state.project_input['challenge']}
+            "name": "Empathy",
+            "description": f"""Uncover systemic patterns and latent needs for: {session_state.project_input['challenge']}
 
+            METHODOLOGY REQUIREMENTS:
+            1. Research Methods Selection
+                - Review and select appropriate qualitative research methods from the guide
+                - Justify method selection based on context and constraints
+                - Plan for multiple data collection approaches
+            
+            2. User Understanding Framework
+                - Apply structured empathy mapping techniques
+                - Implement journey mapping methodologies
+                - Use behavioral analysis frameworks
+            
+            3. Data Collection Approach
+                - Design interview protocols based on best practices
+                - Plan observation methodologies
+                - Structure feedback collection methods
+            
+            4. Synthesis Preparation
+                - Setup pattern recognition frameworks
+                - Prepare insight categorization systems
+                - Plan for data triangulation
+            
+            5. Documentation Strategy
+                - Implement structured note-taking methods
+                - Plan for multimedia documentation
+                - Setup insight capture frameworks
 
+            CONTEXTUAL CONSIDERATIONS:
+            - Challenge Context: {session_state.project_input['context']}
+            - Key Constraints: {str(session_state.project_input['constraints'])}
+            
+            EXPECTED DELIVERABLES:
+            1. Comprehensive Empathy Map
+            2. User Journey Documentation
+            3. Key Insights Matrix
+            4. Behavioral Patterns Analysis
+            5. Emotional Need States Mapping""",
+            "expected_output": """Strategic Empathy Dossier containing:
 
-            Gather insights through analyzing user behavior, needs, and pain points.
-            Consider all stakeholders involved.""",
-            "expected_output": """Detailed empathy map with:
-            1. User observations
-            2. Identified pain points
-            3. Key user needs
-            4. Stakeholder insights""",
+            **Core Empathy Map** (preserving requested structure with enhanced depth):
+            1. SAYS: 
+            - Direct quotes + linguistic analysis of metaphors/emphasis
+            - Contradictions between different interview moments
+            2. THINKS: 
+            - Unarticulated assumptions
+            - Cognitive biases impacting decisions
+            3. USER NEEDS: 
+            - Hierarchy of needs (Basic > Emotional > Aspirational)
+            - "Progress Struggles" (JTBD framework)
+            4. FEELS: 
+            - Emotional journey mapping
+            - Frustration/desire heat mapping
+            5. DOES: 
+            - Observed behaviors vs stated behaviors
+            - Workaround solutions analysis
+
+            **Supplemental Insights:**
+            1. Stakeholder Influence Network Map
+            2. Contradiction Matrix (SAYS vs DOES)
+            3. Emotional Journey Map
+            4. Emerging Opportunity Signals
+             Format: Visual ecosystem map + narrative insights report""",
             "agent": session_state.crew.empathize_agent,
             "human_input": True,
             "show_file_upload": True
-        },
+        },  
         "define": {
             "name": "Define",
-            "description": """Based on the research insights, define the core problem.
+            "description": f"""Transform research insights into actionable problem definitions for: {session_state.project_input['challenge']}
+
+            METHODOLOGY REQUIREMENTS:
+            1. Insight Analysis Framework
+                - Apply structured synthesis methods
+                - Use problem framing techniques
+                - Implement insight clustering approaches
             
-            Create user personas and establish clear success metrics.""",
-            "expected_output": """1. Clear problem statement
-            2. Primary user persona
-            3. Key success metrics
-            4. List of user requirements""",
+            2. Problem Statement Development
+                - Utilize "How Might We" frameworks
+                - Apply root cause analysis methods
+                - Use problem reframing techniques
+            
+            3. User Needs Mapping
+                - Implement needs hierarchy frameworks
+                - Use jobs-to-be-done methodology
+                - Apply outcome-driven innovation approaches
+            
+            4. Opportunity Space Definition
+                - Use opportunity mapping frameworks
+                - Apply constraint analysis methods
+                - Implement possibility thinking approaches
+            
+            5. Success Criteria Development
+                - Use metric development frameworks
+                - Apply validation criteria methods
+                - Implement measurement planning approaches
+
+            CONTEXTUAL CONSIDERATIONS:
+            - Challenge Context: {session_state.project_input['context']}
+            - Key Constraints: {str(session_state.project_input['constraints'])}
+            
+            EXPECTED DELIVERABLES:
+            1. Problem Statement Matrix
+            2. User Needs Framework
+            3. Opportunity Spaces Map
+            4. Success Criteria Definition
+            5. Validation Framework""",
+
+            "expected_output": """1. Multilayer Problem Statements:
+            - Surface-level symptoms vs systemic root causes
+            - JTBD-driven "Progress Struggles" analysis
+            2. 2-Paradox Personas:
+            - Core needs vs contextual constraints
+            - Decision-making tension maps
+            3. Innovation Criteria Matrix:
+            - Desirability/Viability/Feasibility weightings
+            - Constraint transformation opportunities
+            4. How-Might-We Opportunity Landscape:
+            - HMW spectrum (Incremental <-> Transformational)
+            - Adjacent possibility spaces""",
             "agent": session_state.crew.define_agent,
             "human_input": True,
             "show_file_upload": True
         },
         "ideate": {
             "name": "Ideate",
-            "description": """Generate innovative solutions for the defined problem.
-            Use creative techniques to explore multiple approaches.""",
-            "expected_output": """1. List of potential solutions
-            2. Evaluation of each idea
-            3. Prioritized concepts
-            4. Innovation opportunities""",
+            "description": f"""Generate diverse solution concepts for: {session_state.project_input['challenge']}
+
+            METHODOLOGY REQUIREMENTS:
+            1. Ideation Method Selection
+                - Choose appropriate brainstorming techniques
+                - Plan divergent thinking approaches
+                - Structure convergent methods
+            
+            2. Creative Framework Application
+                - Implement lateral thinking tools
+                - Use analogical thinking methods
+                - Apply systematic innovation techniques
+            
+            3. Solution Development Process
+                - Use concept development frameworks
+                - Apply idea building methods
+                - Implement combination techniques
+            
+            4. Evaluation Framework
+                - Use idea assessment criteria
+                - Apply feasibility analysis methods
+                - Implement impact evaluation approaches
+            
+            5. Documentation System
+                - Use idea capture frameworks
+                - Apply organization methods
+                - Implement tracking systems
+
+            CONTEXTUAL CONSIDERATIONS:
+            - Challenge Context: {session_state.project_input['context']}
+            - Key Constraints: {str(session_state.project_input['constraints'])}
+            
+            EXPECTED DELIVERABLES:
+            1. Solution Concepts Portfolio
+            2. Innovation Opportunity Map
+            3. Concept Evolution Framework
+            4. Evaluation Matrix
+            5. Development Roadmap""",
+
+            "expected_output": """
+            Around 5-8 solution concepts, each with:
+            Evaluation of each idea to be a table breaking down the comparisons and trade-offs
+            1. Solution Archetypes:
+            - Core concept
+            - Variant possibilities
+            - Adjacent applications
+            2. Concept Evolution Pathways:
+            - Maturity timeline (Now/Near/Far)
+            - Dependency mapping
+            3. Innovation Impact Matrix:
+            - User value vs implementation complexity
+            - First-principles breakthrough potential
+            4. Hybridization Opportunities:
+            - Concept combination matrix
+            - Cross-domain inspiration"""
+            ,
             "agent": session_state.crew.ideate_agent,
             "human_input": True,
             "show_file_upload": True
         },
         "prototype": {
             "name": "Prototype",
-            "description": """Create a prototype plan for the top solution(s).
-            Define key features and development milestones.""",
-            "expected_output": """1. Prototype specifications
-            2. Core features list
-            3. Development milestones
-            4. Resource requirements""",
+            "description": f"""Create testable manifestations of selected solutions for: {session_state.project_input['challenge']}
+
+            METHODOLOGY REQUIREMENTS:
+            1. Prototype Strategy Development
+                - Select appropriate fidelity levels
+                - Plan iteration approaches
+                - Structure testing methods
+            
+            2. Creation Framework
+                - Use rapid prototyping techniques
+                - Apply minimum viable product methods
+                - Implement feedback integration approaches
+            
+            3. Testing Preparation
+                - Design validation frameworks
+                - Plan user interaction methods
+                - Structure feedback collection
+            
+            4. Iteration Planning
+                - Use improvement frameworks
+                - Apply refinement methods
+                - Implement evolution approaches
+            
+            5. Documentation Process
+                - Use capture methods
+                - Apply learning frameworks
+                - Implement tracking systems
+
+            CONTEXTUAL CONSIDERATIONS:
+            - Challenge Context: {session_state.project_input['context']}
+            - Key Constraints: {str(session_state.project_input['constraints'])}
+            
+            EXPECTED DELIVERABLES:
+            1. Prototype Specifications
+            2. Testing Framework
+            3. Iteration Plan
+            4. Documentation System
+            5. Evolution Strategy""",
+
+            "expected_output": """1. Prototyping Strategy:
+            - Key assumptions hierarchy
+            - Validation sequencing
+            2. Multi-Fidelity Plan:
+            - Paper prototype -> Digital mockup -> Wizard-of-Oz
+            3. Resourceful Materials Matrix:
+            - Low-cost high-impact material substitutions
+            - Digital twin simulation options
+            4. Failure Injection Scenarios:
+            - Controlled stress tests
+            - Edge case exploration""",
             "agent": session_state.crew.prototype_agent,
             "human_input": True,
             "show_file_upload": True
         },
         "test": {
             "name": "Test",
-            "description": """Design a testing protocol for the prototype.
-            Include methods for gathering and analyzing user feedback.""",
-            "expected_output": """1. Testing protocol
-            2. Feedback collection methods
-            3. Success criteria
-            4. Iteration recommendations""",
+            "description": f"""Validate prototype effectiveness and gather user feedback for: {session_state.project_input['challenge']}
+
+            METHODOLOGY REQUIREMENTS:
+            1. Testing Strategy Development
+                - Select validation methods
+                - Plan user engagement
+                - Structure feedback collection
+            
+            2. User Testing Framework
+                - Use interaction protocols
+                - Apply observation methods
+                - Implement feedback systems
+            
+            3. Data Collection Process
+                - Design capture methods
+                - Plan analysis approaches
+                - Structure insight gathering
+            
+            4. Evaluation System
+                - Use assessment frameworks
+                - Apply success metrics
+                - Implement improvement tracking
+            
+            5. Iteration Planning
+                - Use refinement methods
+                - Apply evolution frameworks
+                - Implement development paths
+
+            CONTEXTUAL CONSIDERATIONS:
+            - Challenge Context: {session_state.project_input['context']}
+            - Key Constraints: {str(session_state.project_input['constraints'])}
+            
+            EXPECTED DELIVERABLES:
+            1. Testing Protocol
+            2. Feedback Framework
+            3. Analysis System
+            4. Evaluation Matrix
+            5. Iteration Strategy""",
+
+            "expected_output": """1. Mixed-Methods Protocol:
+            - Behavioral observation grids
+            - Emotion tracking scales
+            - Cognitive walkthroughs
+            2. Contradiction Analysis Framework:
+            - Say/Do gaps
+            - Conscious/Unconscious mismatches
+            3. Insight Extraction Matrix:
+            - Surface reactions
+            - Latent needs signals
+            - Ecosystem impacts
+            4. Pivot/Persevere Decision Tree:
+            - Confidence thresholds
+            - Iteration priority stack""",
             "agent": session_state.crew.test_agent,
             "human_input": True,
             "show_file_upload": True
         },
         "decisions": {
-            "name": "Decision Documentation",
-            "description": """Document all key decisions made during the design thinking process,
-            including the rationale behind each decision.""",
-            "expected_output": """A comprehensive decision log including:
-            1. Decisions made at each stage
-            2. Rationale for each decision
-            3. Alternatives considered
-            4. Impact on the overall design process""",
+            "name": "Decision Archaeology",
+            "description": f"""Document and analyze key decisions throughout the design process for: {session_state.project_input['challenge']}
+
+            METHODOLOGY REQUIREMENTS:
+            1. Decision Mapping
+                - Track key decision points
+                - Document rationales
+                - Analyze impact
+            
+            2. Learning Documentation
+                - Capture insights
+                - Record adaptations
+                - Track evolution
+            
+            3. Pattern Analysis
+                - Identify trends
+                - Map connections
+                - Synthesize learnings
+            
+            4. Impact Assessment
+                - Evaluate outcomes
+                - Measure effectiveness
+                - Track progress
+            
+            5. Knowledge Management
+                - Organize findings
+                - Structure insights
+                - Plan application
+
+            CONTEXTUAL CONSIDERATIONS:
+            - Challenge Context: {session_state.project_input['context']}
+            - Key Constraints: {str(session_state.project_input['constraints'])}
+            
+            EXPECTED DELIVERABLES:
+            1. Decision Matrix
+            2. Learning Framework
+            3. Pattern Map
+            4. Impact Analysis
+            5. Knowledge Base""",
+
+            "expected_output": """1. Decision Impact Network:
+            - Ripple effect visualization
+            - Opportunity cost analysis
+            2. Pivot Point Analysis:
+            - Critical junctures
+            - Paths not taken
+            3. Cognitive Bias Audit:
+            - Anchoring effects
+            - Confirmation tendency checks
+            4. Team Mindset Evolution:
+            - Paradigm shifts
+            - Assumption mortality rate""",
             "agent": session_state.crew.reporting_agent,
             "show_file_upload": False
         },
@@ -503,6 +838,18 @@ def get_task_definitions(session_state):
             "description": """Create a comprehensive markdown report documenting the entire
             design thinking process. Include insights and outcomes from each stage.""",
             "expected_output": """A detailed markdown report including:
+            1. Innovation Story Arc:
+            - Tension points
+            - Breakthrough moments
+            2. Evidence Web:
+            - Research-problem-solution connections
+            - Quant-qual triangulation
+            3. Future Evolution Map:
+            - Solution lifecycle projection
+            - Adjacent application spaces
+            4. Learning Harvest:
+            - Process innovations
+            - Unexpected insights utility
             1. Executive Summary
             2. User Research Findings
             3. Problem Definition
@@ -612,6 +959,56 @@ def setup_api_keys():
     
     st.session_state.model_name = model_options[selected_model]
     
+    # Add PDF upload for design thinking guide
+    st.sidebar.header("Design Thinking Guide")
+    uploaded_guide = st.sidebar.file_uploader(
+        "Upload Design Thinking Guide (PDF)",
+        type=["pdf"],
+        help="Upload a PDF containing design thinking methodology and best practices"
+    )
+    
+    if uploaded_guide:
+        try:
+            # Create a temporary file to store the PDF
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+                tmp_file.write(uploaded_guide.getvalue())
+                guide_path = tmp_file.name
+            
+            # Initialize crew with the guide
+            if gemini_key and serper_key:
+                try:
+                    st.session_state.crew = DesignThinkingCrew(
+                        api_keys=st.session_state.api_keys,
+                        model_name=st.session_state.model_name
+                    )
+                    # Update the RAG tool with the uploaded guide
+                    st.session_state.crew.design_thinking_knowledge = RagTool(
+                        config=dict(
+                            llm=dict(
+                                provider="google",
+                                config=dict(
+                                    model=st.session_state.model_name,
+                                    api_key=gemini_key
+                                ),
+                            ),
+                            embedder=dict(
+                                provider="google",
+                                config=dict(
+                                    model="models/embedding-001",
+                                    task_type="retrieval_document",
+                                ),
+                            ),
+                        ),
+                        files=[guide_path],
+                        name="Design Thinking Guide",
+                        description="A comprehensive guide for design thinking methodology and best practices"
+                    )
+                    st.sidebar.success("Design Thinking Crew initialized with methodology guide!")
+                except Exception as e:
+                    st.sidebar.error(f"Error initializing crew with guide: {e}")
+        except Exception as e:
+            st.sidebar.error(f"Error processing design thinking guide: {e}")
+
     # Initialize crew if keys are provided
     if gemini_key and serper_key:
         if st.session_state.crew is None or st.sidebar.button("Reinitialize Crew"):
@@ -634,10 +1031,14 @@ def setup_challenge():
     )
     
     if challenge_method == "Provide challenge details":
+        st.subheader("Provide Challenge Details")
         challenge = st.text_area("Challenge Statement", placeholder="Enter the design challenge statement...")
+        st.subheader("Provide Context Details")
         context = st.text_area("Context", placeholder="Provide background information about the problem...")
-        constraints = st.text_area("Constraints", placeholder="List the constraints, one per line...")
-        
+        st.subheader("Provide Constraint Details")
+        constraints = st.text_area("Constraints", placeholder="List the constraints, examples:\n- Must be low cost, or cannot use electricity, or needs to meet specific laws")
+
+
         if st.button("Set Challenge"):
             constraints_list = [c.strip() for c in constraints.split("\n") if c.strip()]
             st.session_state.project_input = {
@@ -646,6 +1047,35 @@ def setup_challenge():
                 "constraints": constraints_list if constraints_list else "No specific constraints provided."
             }
             st.success("Challenge set successfully!")
+            
+            # Add tab switch button and script
+            if st.button("Start Design Thinking Process ➡️", key="start_process_button"):
+                # Switch to Design Thinking Process tab (index 1)
+                html("""
+                <script>
+                (() => {
+                    let button = [...window.parent.document.querySelectorAll("button")].filter(button => {
+                        return button.innerText.includes("Start Design Thinking Process")
+                    })[0];
+                    if(button) {
+                        button.onclick = () => {
+                            var tabGroup = window.parent.document.getElementsByClassName("stTabs")[0];
+                            const tabButton = [...tabGroup.querySelectorAll("button")].filter(button => {
+                                return button.innerText.includes("Design Thinking Process")
+                            })[0];
+                            if(tabButton) {
+                                tabButton.click();
+                            } else {
+                                console.log("Design Thinking Process tab button not found");
+                            }
+                        }
+                    } else {
+                        console.log("Start process button not found");
+                    }
+                })();
+                </script>
+                """, height=0)
+                st.rerun()
             
     elif challenge_method == "Generate from domain":
         domain = st.text_input("Domain", placeholder="e.g., Educational Technology, Healthcare...")
@@ -665,6 +1095,25 @@ def setup_challenge():
                             constraints=constraints_list if constraints_list else None
                         )
                         st.success("Challenge generated successfully!")
+                        
+                        # Add tab switch button and script
+                        if st.button("Start Design Thinking Process ➡️", key="start_process_button"):
+                            html("""
+                            <script>
+                            (() => {
+                                const tabGroups = window.parent.document.getElementsByClassName("stTabs");
+                                const mainTabs = tabGroups[0];
+                                if (mainTabs) {
+                                    const designThinkingTab = mainTabs.querySelectorAll("button")[1];
+                                    if (designThinkingTab) {
+                                        designThinkingTab.click();
+                                    }
+                                }
+                            })();
+                            </script>
+                            """, height=0)
+                            st.rerun()
+                        st.success("Challenge generated successfully!")
                     except Exception as e:
                         st.error(f"Error generating challenge: {e}")
                         
@@ -679,6 +1128,31 @@ def setup_challenge():
                 with st.spinner("Analyzing context and extracting challenge..."):
                     constraints_list = [c.strip() for c in constraints.split("\n") if c.strip()]
                     try:
+                        st.session_state.project_input = st.session_state.crew.generate_challenge(
+                        domain=domain_section,
+                        context=context,
+                        constraints=constraints_list if constraints_list else None
+                        )
+                        st.success("Challenge extracted successfully!")
+                        
+                        # Add tab switch button and script
+                        if st.button("Start Design Thinking Process ➡️", key="start_process_button"):
+                            html("""
+                            <script>
+                            (() => {
+                                const tabGroups = window.parent.document.getElementsByClassName("stTabs");
+                                const mainTabs = tabGroups[0];
+                                if (mainTabs) {
+                                    const designThinkingTab = mainTabs.querySelectorAll("button")[1];
+                                    if (designThinkingTab) {
+                                        designThinkingTab.click();
+                                    }
+                                }
+                            })();
+                            </script>
+                            """, height=0)
+                            st.rerun()
+                        
                         # Create a context analysis agent and analyze the context
                         context_analysis_agent = Agent(
                             role="Context Analyst",
@@ -698,7 +1172,7 @@ def setup_challenge():
                         # Run the briefing task first
                         briefing_crew = Crew(
                             agents=[st.session_state.crew.manager_agent],
-                            tasks=[manager_briefing_task],
+                            tasks=[st.session_state.crew.manager_briefing_task],
                             verbose=True
                         )
 
@@ -725,6 +1199,7 @@ def setup_challenge():
                             constraints=constraints_list if constraints_list else None
                         )
                         st.success("Challenge extracted successfully!")
+
                     except Exception as e:
                         st.error(f"Error extracting challenge: {e}")
 
@@ -834,6 +1309,13 @@ def run_design_thinking_process():
         
     # Show tabs for all stages
     tabs = st.tabs([task_definitions[stage]["name"] for stage in task_order])
+
+    # Handle tab switching from navigation
+    if 'switch_tab' in st.session_state:
+        tab_index = st.session_state.switch_tab
+        del st.session_state.switch_tab  # Clear the switch flag
+        st.session_state.active_tab_index = tab_index
+        
     current_index = task_order.index(st.session_state.current_stage)
 
     # Update active tab index to match current stage
@@ -842,6 +1324,8 @@ def run_design_thinking_process():
     # Handle content for all tabs so it persists
     for tab_index, stage in enumerate(task_order):
         with tabs[tab_index]:
+            # Add stage indicator
+            st.info(f"Currently in: {task_definitions[stage]['name']} stage", icon="📍")
             current_task_def = task_definitions[stage]
             
             # Display the agent role
@@ -1039,8 +1523,11 @@ def run_design_thinking_process():
             if stage in st.session_state.completed_tasks:
                 st.success("Task completed!")
                 with st.expander("Task Output", expanded=True):
-                    st.markdown(st.session_state.task_outputs.get(stage, "No output available"))
-                    
+                    # Clean and render the markdown properly
+                    output_text = st.session_state.task_outputs.get(stage, "No output available")
+                    cleaned_output = output_text.replace("```markdown", "").replace("```", "")
+                    st.markdown(cleaned_output)
+                
                 # Display any previous feedback
                 if stage in st.session_state.human_feedback:
                     with st.expander("Previous Feedback"):
@@ -1055,11 +1542,120 @@ def run_design_thinking_process():
                 # Show agent chat interface for all stages if completed
                 display_agent_chat(stage, current_task_def['agent'].role)
                 
+            
             else:
+                if stage == "empathize":
+                    st.markdown("""
+                    ### About the Empathy Research Agent
+                    
+                    Here is the Empathy Research Agent - a world-class ethnoresearcher with a primary goal of uncovering human needs, 
+                    pain points, and motivations to help establish a foundation for user-centered research.
+
+                    This Agent derives an empathy map from its internal, established databases or from uploaded reference PDF/documents. 
+                    This could include:
+                    - Interview transcripts
+                    - Market research
+                    - Consumer study notes
+                    - User feedback
+                    - Behavioral analytics
+                    - Observational data
+
+                    The Agent analyzes this information to create comprehensive empathy maps that capture the full spectrum of user experiences.
+                    
+                    ---
+                    """)
+                elif stage == "define":
+                    st.markdown("""
+                    ### About the Problem Definition Specialist
+
+                    Here is the Problem Definition Specialist agent - a master analyst trained to transform complex research data 
+                    into concise problem statements which reveal core user needs, challenge assumptions, and provide a solid 
+                    foundation for breakthrough innovation.
+
+                    This agent will leverage learnings from the Empathy Agent as well as any pertinent files you choose to upload. 
+                    These could include:
+                    - Market research documents
+                    - Predetermined personas of interest
+                    - User research findings
+                    - Industry reports
+                    - Stakeholder requirements
+
+                    You can also proceed without uploading additional files - this agent will effectively utilize the insights 
+                    gathered from your work with the Empathy agent to define the problem space.
+
+                    The agent excels at synthesizing information to create actionable problem statements that capture the 
+                    essence of user needs while maintaining solution neutrality.
+                    
+                    ---
+                    """)
+                elif stage == "ideate":
+                    st.markdown("""
+                    ### About the Innovation Facilitation Agent
+
+                    Here is the Innovation Facilitation Agent - trained by top innovation hubs worldwide with a focus on orchestrating 
+                    breakthrough, radical, and diverse solutions through systemic exploration of possibility white spaces.
+
+                    Just as with the other agents, you can upload:
+                    - Supporting ideation documentation
+                    - Study information
+                    - Market research
+                    - Preferred ideation methods
+                    
+                    Feel free to leave this section empty and have the agent run the ideation session on its own, leveraging 
+                    insights from previous stages to generate innovative solutions.
+                    
+                    ---
+                    """)
+                elif stage == "prototype":
+                    st.markdown("""
+                    ### About the Prototyping Specialist Agent
+
+                    Here is the Prototyping Specialist Agent - trained to transform abstract concepts from the ideation session 
+                    into tangible and testable experiences. This is done with a focus on developing a Minimal Viable Product, 
+                    to ensure the most efficient use of resources are dedicated to validating the most critical assumptions.
+
+                    Though not needed, you can upload:
+                    - Existing prototyping plans
+                    - Example prototypes
+                    - Design specifications
+                    - Resource constraints
+
+                    For this agent, you will select the solutions (developed with the Ideate Agent) that you would like to 
+                    move forward with creating a prototyping plan for.
+                    
+                    ---
+                    """)
+                elif stage == "test":
+                    st.markdown("""
+                    ### About the User Testing Coordinator Agent
+
+                    Here is the User Testing Coordinator Agent - trained as a renowned methodologist for user testing to design 
+                    testing protocols that extract learnings from user interactions, validate critical assumptions, and guide 
+                    iterative refinement toward solutions users truly value.
+
+                    This agent is meant to be used iteratively with the testing ideas laid out by your discussion with the 
+                    prototyping specialist agent. You can upload relevant information such as:
+                    - Preliminary test results
+                    - Meeting minute updates from prototyping discussions
+                    - Current testing plan drafts that need refinement
+                    - User feedback protocols
+                    - Testing metrics and KPIs
+
+                    The agent will help design comprehensive testing protocols tailored to your specific prototypes and user needs.
+                    
+                    ---
+                    """)
+
+
                 # Display the task description and expected output
                 st.markdown("### Task Description")
-                st.markdown(task_description)
-                
+                if stage == "empathize":
+                    st.markdown(f"This task is derived from the challenge: ")
+                st.markdown(f"Challenge: {st.session_state.project_input['challenge']}")
+                st.markdown(f"Context: {st.session_state.project_input['context']}")
+                st.markdown(f"Constraints: {st.session_state.project_input['constraints']}")
+
+               
                 st.markdown("### Expected Output")
                 st.markdown(current_task_def["expected_output"])
                 
@@ -1124,6 +1720,53 @@ def run_design_thinking_process():
                                 })
                                 
                             elif stage == "ideate":
+                                # Add Define output
+                                if "define" in st.session_state.completed_tasks:
+                                    context_tasks.append({
+                                        "stage": "define",
+                                        "output": st.session_state.task_outputs["define"]
+                                    })
+                                # Add Empathize output
+                                if "empathize" in st.session_state.completed_tasks:
+                                    context_tasks.append({
+                                        "stage": "empathize",
+                                        "output": st.session_state.task_outputs["empathize"]
+                                    })
+
+                            elif stage == "prototype":
+                                # Add Ideate output
+                                if "ideate" in st.session_state.completed_tasks:
+                                    context_tasks.append({
+                                        "stage": "ideate",
+                                        "output": st.session_state.task_outputs["ideate"]
+                                    })
+                                # Add Define output
+                                if "define" in st.session_state.completed_tasks:
+                                    context_tasks.append({
+                                        "stage": "define",
+                                        "output": st.session_state.task_outputs["define"]
+                                    })
+                                # Add Empathize output
+                                if "empathize" in st.session_state.completed_tasks:
+                                    context_tasks.append({
+                                        "stage": "empathize",
+                                        "output": st.session_state.task_outputs["empathize"]
+                                    })
+
+                            elif stage == "test":
+                                # Add Prototype output
+                                if "prototype" in st.session_state.completed_tasks:
+                                    context_tasks.append({
+                                        "stage": "prototype",
+                                        "output": st.session_state.task_outputs["prototype"]
+                                    })
+                                # Add Ideate output
+                                if "ideate" in st.session_state.completed_tasks:
+                                    context_tasks.append({
+                                        "stage": "ideate",
+                                        "output": st.session_state.task_outputs["ideate"]
+                                    })
+                                # Add previous outputs
                                 if "define" in st.session_state.completed_tasks:
                                     context_tasks.append({
                                         "stage": "define",
@@ -1133,30 +1776,6 @@ def run_design_thinking_process():
                                     context_tasks.append({
                                         "stage": "empathize",
                                         "output": st.session_state.task_outputs["empathize"]
-                                    })
-                            
-                            elif stage == "prototype":
-                                if "ideate" in st.session_state.completed_tasks:
-                                    context_tasks.append({
-                                        "stage": "ideate",
-                                        "output": st.session_state.task_outputs["ideate"]
-                                    })
-                                if "define" in st.session_state.completed_tasks:
-                                    context_tasks.append({
-                                        "stage": "define",
-                                        "output": st.session_state.task_outputs["define"]
-                                    })
-
-                            elif stage == "test":
-                                if "prototype" in st.session_state.completed_tasks:
-                                    context_tasks.append({
-                                        "stage": "prototype",
-                                        "output": st.session_state.task_outputs["prototype"]
-                                    })
-                                if "ideate" in st.session_state.completed_tasks:
-                                    context_tasks.append({
-                                        "stage": "ideate",
-                                        "output": st.session_state.task_outputs["ideate"]
                                     })
                                 
                             elif stage == "decisions":
@@ -1182,6 +1801,24 @@ def run_design_thinking_process():
                                 task_description += "\n\nPREVIOUS STAGES OUTPUTS:\n"
                                 for context in context_tasks:
                                     task_description += f"\n## {context['stage'].upper()} STAGE OUTPUT:\n{context['output']}\n"
+                            
+                            # Extract any manager logs/interactions for process logs
+                            manager_logs = []
+                            
+                            # Add logging/validation
+                            st.session_state.process_logs.append({
+                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "stage": stage,
+                                "action": f"Executed {current_task_def['name']} task",
+                                "context_passed": [ctx["stage"] for ctx in context_tasks],
+                                "manager_notes": manager_logs
+                            })
+
+                            # Optional: Add visual confirmation
+                            if context_tasks:
+                                st.write("Previous stage outputs included:")
+                                for ctx in context_tasks:
+                                    st.write(f"- {ctx['stage'].capitalize()} stage output")
 
                             # Add PDF content to the task description
                             pdf_contents = st.session_state.uploaded_pdfs.get(stage, [])
@@ -1298,8 +1935,7 @@ def run_design_thinking_process():
                                 )
                                 st.write("Task completed successfully!")
                             
-                            # Extract any manager logs/interactions for process logs
-                            manager_logs = []
+
                             try:
                                 # Extract manager logs from the result if available
                                 if hasattr(result, 'log') and result.log:
@@ -1346,7 +1982,7 @@ def run_design_thinking_process():
     # Create separate chat containers for each stage
     chat_containers = {}
     for tab_index, stage in enumerate(task_order):
-        chat_containers[stage] = st.container()
+        chat_containers[stage] = st.container(key=f"chat_container_{stage}_{tab_index}")
 
     # Later in the chat logic section:
     if 'current_chat_stage' in st.session_state and 'current_chat_agent' in st.session_state:
@@ -1375,7 +2011,7 @@ def run_design_thinking_process():
                     f"Ask a question or type 'regenerate' with instructions...",
                     key=f"chat_input_{stage_name}_{tab_iteration}_{unique_hash}"
                 )
-                        
+                
                 # Process user input
                 if user_input:
                     # Add user message to chat history
@@ -1390,8 +2026,6 @@ def run_design_thinking_process():
                     # Check if regeneration request
                     if "redo" in user_input.lower() or "regenerate" in user_input.lower():
                         # Process regeneration request
-                        # (your existing regeneration code)
-                        
                         # Extract instructions
                         instructions = user_input.lower()
                         if "regenerate" in instructions:
@@ -1423,6 +2057,19 @@ def run_design_thinking_process():
                         # Reset the task
                         if stage_name in st.session_state.completed_tasks:
                             st.session_state.completed_tasks.pop(stage_name, None)
+                        
+                        # Reset navigation state before rerunning
+                        if 'current_chat_stage' in st.session_state:
+                            del st.session_state.current_chat_stage
+                        if 'current_chat_agent' in st.session_state:
+                            del st.session_state.current_chat_agent
+                        
+                        # Move to next stage if it exists
+                        current_index = task_order.index(stage_name)
+                        if current_index < len(task_order) - 1:
+                            next_stage = task_order[current_index + 1]
+                            st.session_state.current_stage = next_stage
+                            st.session_state.active_tab_index = current_index + 1
                         
                         st.rerun()
                     else:
@@ -1460,47 +2107,225 @@ def run_design_thinking_process():
                             "avatar": "🧠"
                         })
                         
+                        # Reset navigation state before rerunning
+                        if 'current_chat_stage' in st.session_state:
+                            del st.session_state.current_chat_stage
+                        if 'current_chat_agent' in st.session_state:
+                            del st.session_state.current_chat_agent
+                        
+                        # Move to next stage if it exists
+                        current_index = task_order.index(stage_name)
+                        if current_index < len(task_order) - 1:
+                            next_stage = task_order[current_index + 1]
+                            st.session_state.current_stage = next_stage
+                            st.session_state.active_tab_index = current_index + 1
+                        
                         st.rerun()
 
     # Navigation controls
     st.subheader("Navigation")
-    
+
+    def run_stage(stage_name, task_def):
+        """Run a single stage and handle errors appropriately"""
+        try:
+            # Get PDF contents for this stage
+            pdf_contents = st.session_state.uploaded_pdfs.get(stage_name, [])
+            
+            # Get context from previous stages
+            context_tasks = []
+            for prev_stage in task_order[:task_order.index(stage_name)]:
+                if prev_stage in st.session_state.completed_tasks:
+                    context_tasks.append({
+                        "stage": prev_stage,
+                        "output": st.session_state.task_outputs[prev_stage]
+                    })
+            
+            # Create task description with all context
+            task_description = task_def["description"]
+            
+            # Add context from previous stages
+            if context_tasks:
+                task_description += "\n\nPREVIOUS STAGES OUTPUT:\n"
+                for ctx in context_tasks:
+                    task_description += f"\n## {ctx['stage'].upper()} STAGE OUTPUT:\n{ctx['output']}\n"
+            
+            # Create the task
+            task = Task(
+                description=task_description,
+                expected_output=task_def["expected_output"],
+                agent=task_def["agent"]
+            )
+            
+            # Create crew for this task
+            temp_crew = Crew(
+                agents=[task_def["agent"]],
+                tasks=[task],
+                verbose=True
+            )
+            
+            # Run the task with error handling
+            try:
+                result = temp_crew.kickoff(
+                    inputs={
+                        "project_input": st.session_state.project_input,
+                        "challenge": st.session_state.project_input['challenge'],
+                        "context": st.session_state.project_input['context'],
+                        "constraints": st.session_state.project_input['constraints'],
+                        "context_tasks": context_tasks,
+                        "pdf_contents": pdf_contents
+                    }
+                )
+                
+                # Validate result
+                if not result or not result.raw:
+                    raise ValueError("Empty response from LLM")
+                    
+                return result
+                
+            except Exception as e:
+                # Handle specific LLM errors
+                if "Invalid response from LLM" in str(e) or "Empty response" in str(e):
+                    # Retry with backup prompt
+                    backup_task = Task(
+                        description=f"""BACKUP ATTEMPT - Previous attempt failed. Please try again with this simplified prompt:
+                        
+                        CHALLENGE: {st.session_state.project_input['challenge']}
+                        
+                        TASK: {task_description[:500]}... (truncated)
+                        
+                        Please provide a response for this {stage_name} stage, focusing on the core requirements.
+                        """,
+                        expected_output=task_def["expected_output"],
+                        agent=task_def["agent"]
+                    )
+                    
+                    result = temp_crew.kickoff(
+                        inputs={
+                            "project_input": st.session_state.project_input,
+                            "challenge": st.session_state.project_input['challenge']
+                        }
+                    )
+                    
+                    if result and result.raw:
+                        return result
+                    else:
+                        raise ValueError(f"Failed to get valid response from LLM after retry for {stage_name} stage")
+                else:
+                    raise e
+                    
+        except Exception as e:
+            st.error(f"Error running {task_def['name']}: {str(e)}")
+            return None
+
     col1, col2, col3 = st.columns([1, 2, 1])
-    
+
+    # Helper function for tab switching
+    def add_tab_switch_script(button_text, tab_text):
+        html(f"""
+        <script>
+        (() => {{
+            let button = [...window.parent.document.querySelectorAll("button")].filter(button => {{
+                return button.innerText.includes("{button_text}")
+            }})[0];
+            if(button) {{
+                button.onclick = () => {{
+                    var tabGroup = window.parent.document.getElementsByClassName("stTabs")[1];
+                    const tabButton = [...tabGroup.querySelectorAll("button")].filter(button => {{
+                        return button.innerText.includes("{tab_text}")
+                    }})[0];
+                    if(tabButton) {{
+                        tabButton.click();
+                    }} else {{
+                        console.log("tab button {tab_text} not found");
+                    }}
+                }}
+            }} else {{
+                console.log("button not found: {button_text}");
+            }}
+        }})();
+        </script>
+        """, height=0)
+
     with col1:
         # Previous button
         if current_index > 0:
-            if st.button("⬅️ Previous Stage", key="prev_stage_button"):
+            prev_stage = task_order[current_index - 1]
+            prev_stage_name = task_definitions[prev_stage]['name']
+            if st.button(f"⬅️ Previous ({prev_stage_name})", key=f"prev_stage_button_{current_index}"):
                 prev_stage_index = current_index - 1
                 st.session_state.current_stage = task_order[prev_stage_index]
-                # Update active tab index
                 st.session_state.active_tab_index = prev_stage_index
-                st.rerun()
-    
+                if 'current_chat_stage' in st.session_state:
+                    del st.session_state.current_chat_stage
+                if 'current_chat_agent' in st.session_state:
+                    del st.session_state.current_chat_agent
+                st.toast(f"Switching to {prev_stage_name} tab", icon="⬅️")
+            # Add tab switch script for previous button
+            add_tab_switch_script(f"Previous ({prev_stage_name})", prev_stage_name)
+
     with col3:
         # Next button
         if current_index < len(task_order) - 1:
-            if st.button("Next Stage ➡️", key="next_stage_button"):
-                # Set the next stage
-                next_stage_index = current_index + 1
-                st.session_state.current_stage = task_order[next_stage_index]
-                # Update the active tab index
+            next_stage_index = current_index + 1
+            next_stage = task_order[next_stage_index]
+            next_stage_name = task_definitions[next_stage]['name']
+            if st.button(f"Next ({next_stage_name}) ➡️", key=f"next_stage_button_{current_index}"):
+                st.session_state.current_stage = next_stage
                 st.session_state.active_tab_index = next_stage_index
-                st.rerun()
+                if 'current_chat_stage' in st.session_state:
+                    del st.session_state.current_chat_stage
+                if 'current_chat_agent' in st.session_state:
+                    del st.session_state.current_chat_agent
+                st.toast(f"Switching to {next_stage_name} tab", icon="➡️")
+            # Add tab switch script for next button
+            add_tab_switch_script(f"Next ({next_stage_name})", next_stage_name)
 
+    
     with col2:
         # Jump to any stage
         jump_options = ["Jump to..."] + [task_definitions[stage]["name"] for stage in task_order]
-        jump_to = st.selectbox("", jump_options, index=0)
+        jump_to = st.selectbox("", jump_options, index=0, key=f"jump_select_{current_index}")
         
         if jump_to != "Jump to...":
             jump_index = [task_definitions[stage]["name"] for stage in task_order].index(jump_to)
             target_stage = task_order[jump_index]
-            if st.button(f"Go to {jump_to}", key="jump_button"):
-                st.session_state.current_stage = target_stage
-                # Update active tab index
-                st.session_state.active_tab_index = jump_index
-                st.rerun()
+            target_stage_name = task_definitions[target_stage]['name']
+            
+            # Check if we need to run previous stages
+            previous_stages = task_order[:jump_index]
+            missing_stages = [stage for stage in previous_stages if stage not in st.session_state.completed_tasks]
+            
+            if missing_stages:
+                st.warning(f"⚠️ Some previous stages haven't been completed: {', '.join([task_definitions[s]['name'] for s in missing_stages])}")
+                if st.button(f"Run previous stages and go to {jump_to}", key=f"run_previous_{current_index}"):
+                    # Run missing stages sequentially
+                    with st.spinner("Running previous stages..."):
+                        for stage in missing_stages:
+                            try:
+                                result = run_stage(stage, task_definitions[stage])
+                                if result:
+                                    st.session_state.completed_tasks[stage] = True
+                                    st.session_state.task_outputs[stage] = result.raw
+                            except Exception as e:
+                                st.error(f"Error in {task_definitions[stage]['name']}: {str(e)}")
+                                break
+                    
+                    # Now jump to target stage
+                    st.session_state.current_stage = target_stage
+                    st.session_state.active_tab_index = jump_index
+                    st.rerun()
+            else:
+                if st.button(f"Go to {jump_to}", key=f"jump_button_{current_index}"):
+                    st.session_state.current_stage = target_stage
+                    st.session_state.active_tab_index = jump_index
+                    if 'current_chat_stage' in st.session_state:
+                        del st.session_state.current_chat_stage
+                    if 'current_chat_agent' in st.session_state:
+                        del st.session_state.current_chat_agent
+                    st.toast(f"Switching to {target_stage_name} tab", icon="🔄")
+                    st.rerun()
+
+
 
 def display_decision_log():
     if st.session_state.crew:
@@ -1511,7 +2336,7 @@ def display_decision_log():
 # Main Streamlit UI
 def main():
     st.set_page_config(
-        page_title="Design Thinking AI",
+        page_title="Design Thinking AI Cluster (DTAAC)",
         page_icon="🧠",
         layout="wide",
         initial_sidebar_state="expanded"
@@ -1524,8 +2349,15 @@ def main():
     setup_api_keys()
     
     # App title
-    st.title("🧠 Design Thinking AI")
-    st.markdown("Collaborative AI-powered design thinking process")
+    st.title("🧠 Design Thinking AI Cluster (DTAAC)")
+    st.markdown("""Welcome to the Design Thinking AI Agent Cluster (DTAAC). 
+                This DTAAC platform uses a series of coordinated agent to act as a coach or assistant through your Design Thinking journey. 
+                Here we will work together to make sure you follow the Design Thinking guidelines and produce the best product your customer could ask for. 
+                We can start this journey in three ways:""") 
+    st.markdown("1. Provide the problem statement directly") 
+    st.markdown("2. Extract the problem from context clues")
+    st.markdown("3. Generate a problem according to a given domain")
+    st.markdown("Each one will give a different prompt to better match your intended design journey")
     
     # Main content area
     if st.session_state.crew is None:
@@ -1546,6 +2378,10 @@ def main():
                 
         with main_tabs[2]:
             display_decision_log()
+
+      
+    if 'switch_tab' not in st.session_state:
+        st.session_state.switch_tab = None
 
 if __name__ == "__main__":
     main()    
