@@ -90,7 +90,7 @@ graph TD
             F -- No --> H[Use Default RAG]
             G --> I[Crew Ready]
             H --> I
-        end
+        
 
         subgraph "Challenge Setup"
             I --> J[Challenge Setup UI]
@@ -104,7 +104,7 @@ graph TD
             P --> O
             Q --> O
             O --> R[Display Challenge Details]
-        end
+        
         
         subgraph "Design Thinking Process"
               R --> S(Manager Briefing Task)
@@ -121,7 +121,7 @@ graph TD
                   T6 --> T7{Revise Task?}
                   T7 -- Yes --> T3
                   T7 -- No --> U[Current Stage: Define]
-              end
+              
 
               subgraph "Define Stage"
                   U --> U1{Uploaded PDFs?}
@@ -134,7 +134,7 @@ graph TD
                   U6 --> U7{Revise Task?}
                   U7 -- Yes --> U3
                   U7 -- No --> V[Current Stage: Ideate]
-              end
+              
 
               subgraph "Ideate Stage"
                   V --> V1{Uploaded PDFs?}
@@ -147,7 +147,7 @@ graph TD
                   V6 --> V7{Revise Task?}
                   V7 -- Yes --> V3
                   V7 -- No --> W[Current Stage: Prototype]
-              end
+              
 
               subgraph "Prototype Stage"
                   W --> W1[Display Ideation Solutions]
@@ -162,7 +162,7 @@ graph TD
                   W8 --> W9{Revise Task?}
                   W9 -- Yes --> W5
                   W9 -- No --> X[Current Stage: Test]
-              end
+              
 
               subgraph "Test Stage"
                   X --> X1[Display Prototyped Solutions]
@@ -177,7 +177,7 @@ graph TD
                   X8 --> X9{Revise Task?}
                   X9 -- Yes --> X5
                   X9 -- No --> Y[Current Stage: Decision Archaeology]
-              end
+              
 
               subgraph "Decision Archaeology Stage"
                   Y --> Y1(Run Decision Archaeology Task with All Previous Outputs)
@@ -187,14 +187,14 @@ graph TD
                   Y4 --> Y5{Revise Task?}
                   Y5 -- Yes --> Y1
                   Y5 -- No --> Z[Current Stage: Final Report]
-              end
+              
 
               subgraph "Final Report Stage"
                 Z --> Z1(Run Reporting Task with all previous outputs)
                 Z1 --> Z2[Final Report Output]
                 Z2 --> Z3(Store output & Mark Complete)
-              end
-        end
+              
+        
 
         subgraph "Decision Log"
             T4 -- Log Decision --> AA[Decision Tracker]
@@ -205,7 +205,7 @@ graph TD
             Y2 -- Log Decision --> AA
             Z2 -- Log Decision --> AA
             AA --> AB[Display Decision Log]
-        end
+        
                 
         subgraph Navigation
             AC[Previous Stage Button] --> AD{Previous Stage Available?}
@@ -217,8 +217,8 @@ graph TD
             AK[Jump to Stage] --> AL{Valid stage selected}
             AL -- Yes --> AM(Switch to Selected Stage)
             AL -- No --> AN[Disable Button]
-        end
-    end
+        
+    
 ```
 
 ## Detailed Workflow Explanation
