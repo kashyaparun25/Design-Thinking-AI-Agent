@@ -76,6 +76,151 @@ flowchart TD
 
 ---
 
+```mermaib
+graph TD
+    subgraph "Design Thinking AI Cluster (DTAAC)"
+        subgraph "Initialization & Setup"
+            A[Start] --> B(Initialize Session State)
+            B --> C{API Keys Provided?}
+            C -- Yes --> D(Initialize DesignThinkingCrew)
+            C -- No --> E[Prompt for API Keys]
+            E --> C
+            D --> F{Design Thinking Guide Provided?}
+            F -- Yes --> G(Initialize RAG with Guide)
+            F -- No --> H[Use Default RAG]
+            G --> I[Crew Ready]
+            H --> I
+        end
+
+        subgraph "Challenge Setup"
+            I --> J[Challenge Setup UI]
+            J --> K{Challenge Definition Method?}
+            K -- Provide Details --> L[Enter Challenge, Context, Constraints]
+            K -- Generate from Domain --> M[Enter Domain, Context, Constraints]
+            K -- Extract from Context --> N[Enter Context, Constraints]
+            L --> O(Store Project Input)
+            M --> P(Generate Challenge)
+            N --> Q(Analyze Context & Extract Challenge)
+            P --> O
+            Q --> O
+            O --> R[Display Challenge Details]
+        end
+        
+        subgraph "Design Thinking Process"
+              R --> S(Manager Briefing Task)
+              S --> T[Current Stage: Empathize]
+
+              subgraph "Empathize Stage"
+                  T --> T1{Uploaded PDFs?}
+                  T1 -- Yes --> T2(Process PDFs)
+                  T1 -- No --> T3
+                  T2 --> T3(Run Empathize Task)
+                  T3 --> T4[Empathize Task Output]
+                  T4 --> T5(Store Output & Mark Complete)
+                  T5 --> T6[Display Output & Chat Interface]
+                  T6 --> T7{Revise Task?}
+                  T7 -- Yes --> T3
+                  T7 -- No --> U[Current Stage: Define]
+              end
+
+              subgraph "Define Stage"
+                  U --> U1{Uploaded PDFs?}
+                  U1 -- Yes --> U2(Process PDFs)
+                  U1 -- No --> U3
+                  U2 --> U3(Run Define Task with Empathize Context)
+                  U3 --> U4[Define Task Output]
+                  U4 --> U5(Store Output & Mark Complete)
+                  U5 --> U6[Display Output & Chat Interface]
+                  U6 --> U7{Revise Task?}
+                  U7 -- Yes --> U3
+                  U7 -- No --> V[Current Stage: Ideate]
+              end
+
+              subgraph "Ideate Stage"
+                  V --> V1{Uploaded PDFs?}
+                  V1 -- Yes --> V2(Process PDFs)
+                  V1 -- No --> V3
+                  V2 --> V3(Run Ideate Task with Empathize & Define Context)
+                  V3 --> V4[Ideate Task Output]
+                  V4 --> V5(Store Output & Mark Complete)
+                  V5 --> V6[Display Output & Chat Interface]
+                  V6 --> V7{Revise Task?}
+                  V7 -- Yes --> V3
+                  V7 -- No --> W[Current Stage: Prototype]
+              end
+
+              subgraph "Prototype Stage"
+                  W --> W1[Display Ideation Solutions]
+                  W1 --> W2[Select Solutions to Prototype]
+                  W2 --> W3{Uploaded PDFs?}
+                  W3 -- Yes --> W4(Process PDFs)
+                  W3 -- No --> W5
+                  W4 --> W5(Run Prototype Task with Context & Selected Solutions)
+                  W5 --> W6[Prototype Task Output]
+                  W6 --> W7(Store Output & Mark Complete)
+                  W7 --> W8[Display Output & Chat Interface]
+                  W8 --> W9{Revise Task?}
+                  W9 -- Yes --> W5
+                  W9 -- No --> X[Current Stage: Test]
+              end
+
+              subgraph "Test Stage"
+                  X --> X1[Display Prototyped Solutions]
+                  X1 --> X2[Select Prototypes to Test]
+                  X2 --> X3{Uploaded PDFs?}
+                  X3 -- Yes --> X4(Process PDFs)
+                  X3 -- No --> X5
+                  X4 --> X5(Run Test Task with Context & Selected Prototypes)
+                  X5 --> X6[Test Task Output]
+                  X6 --> X7(Store Output & Mark Complete)
+                  X7 --> X8[Display Output & Chat Interface]
+                  X8 --> X9{Revise Task?}
+                  X9 -- Yes --> X5
+                  X9 -- No --> Y[Current Stage: Decision Archaeology]
+              end
+
+              subgraph "Decision Archaeology Stage"
+                  Y --> Y1(Run Decision Archaeology Task with All Previous Outputs)
+                  Y1 --> Y2[Decision Archaeology Output]
+                  Y2 --> Y3(Store Output & Mark Complete)
+                  Y3 --> Y4[Display Output & Chat Interface]
+                  Y4 --> Y5{Revise Task?}
+                  Y5 -- Yes --> Y1
+                  Y5 -- No --> Z[Current Stage: Final Report]
+              end
+
+              subgraph "Final Report Stage"
+                Z --> Z1(Run Reporting Task with all previous outputs)
+                Z1 --> Z2[Final Report Output]
+                Z2 --> Z3(Store output & Mark Complete)
+              end
+        end
+
+        subgraph "Decision Log"
+            T4 -- Log Decision --> AA[Decision Tracker]
+            U4 -- Log Decision --> AA
+            V4 -- Log Decision --> AA
+            W6 -- Log Decision --> AA
+            X6 -- Log Decision --> AA
+            Y2 -- Log Decision --> AA
+            Z2 -- Log Decision --> AA
+            AA --> AB[Display Decision Log]
+        end
+                
+        subgraph Navigation
+            AC[Previous Stage Button] --> AD{Previous Stage Available?}
+            AD -- Yes --> AE(Switch to Previous Stage & Tab)
+            AD -- No --> AF[Disable Button]
+            AG[Next Stage Button] --> AH{Next Stage Available?}
+            AH -- Yes --> AI(Switch to Next Stage & Tab)
+            AH -- No --> AJ[Disable button]
+            AK[Jump to Stage] --> AL{Valid stage selected}
+            AL -- Yes --> AM(Switch to Selected Stage)
+            AL -- No --> AN[Disable Button]
+        end
+    end
+```
+
 ## Detailed Workflow Explanation
 
 ### Challenge Setup 🎯
