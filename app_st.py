@@ -11,8 +11,87 @@ from streamlit.components.v1 import html
 from crewai import Agent, Task, Crew, Process, LLM
 from crewai_tools import SerperDevTool, RagTool, PDFSearchTool
 import tempfile
+from fpdf import FPDF
+import markdown
+import tempfile
+from io import BytesIO 
 
+def create_pdf_from_markdown(markdown_text, title):
+    """Convert markdown to PDF and return the PDF as bytes"""
+    class CustomPDF(FPDF):
+        def header(self):
+            self.set_font('Arial', 'B', 12)
+            # Encode title to avoid Unicode issues
+            safe_title = title.encode('ascii', 'replace').decode('ascii')
+            self.cell(0, 10, safe_title, 0, 1, 'C')
+            self.ln(10)
+            
+        def footer(self):
+            self.set_y(-15)
+            self.set_font('Arial', 'I', 8)
+            self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
 
+    try:
+        # Initialize PDF
+        pdf = CustomPDF()
+        pdf.add_page()
+        pdf.set_font('Arial', '', 11)
+        
+        # Convert markdown to plain text and handle encoding
+        html = markdown.markdown(markdown_text)
+        
+        # Clean up HTML and handle special characters
+        clean_text = html.replace('<p>', '').replace('</p>', '\n')
+        clean_text = clean_text.replace('<strong>', '').replace('</strong>', '')
+        clean_text = clean_text.replace('"', '"').replace('"', '"')
+        clean_text = clean_text.replace(''', "'").replace(''', "'")
+        clean_text = clean_text.replace('–', '-').replace('—', '-')
+        clean_text = clean_text.replace('•', '*')
+        
+        # Convert to ASCII, replacing unsupported characters
+        safe_text = clean_text.encode('ascii', 'replace').decode('ascii')
+        
+        # Write content with proper line breaks
+        pdf.set_auto_page_break(auto=True, margin=15)
+        for line in safe_text.split('\n'):
+            if line.strip():
+                try:
+                    pdf.multi_cell(0, 10, line.strip())
+                except:
+                    # If a line fails, try writing it character by character
+                    for char in line:
+                        try:
+                            pdf.write(10, char)
+                        except:
+                            pdf.write(10, '?')
+                    pdf.ln()
+        
+        # Save to bytes
+        with BytesIO() as bytes_file:
+            pdf.output(bytes_file)
+            return bytes_file.getvalue()
+            
+    except Exception as e:
+        # Create simple PDF with error message
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font('Arial', '', 12)
+        error_msg = f"Error generating PDF. Please try again.\nError: {str(e)}"
+        pdf.multi_cell(0, 10, error_msg)
+        
+        with BytesIO() as bytes_file:
+            pdf.output(bytes_file)
+            return bytes_file.getvalue()
+
+def sanitize_task_description(description):
+    """Clean up task description to avoid template variable errors"""
+    # Remove any potential template variable markers
+    description = description.replace('{{', '{').replace('}}', '}')
+    description = description.replace('{%', '').replace('%}', '')
+    # Replace quotes with straight quotes
+    description = description.replace('"', '"').replace('"', '"')
+    description = description.replace(''', "'").replace(''', "'")
+    return description
 
 # For simplicity, we'll include the classes here for a complete example
 class DecisionTracker:
@@ -44,16 +123,131 @@ class DecisionTracker:
             
         return log
 
+class EnhancedCitationTrackingSerperTool(SerperDevTool):
+    def _run(self, query: str) -> str:
+        # Get context before running query
+        context = {
+            'stage': getattr(st.session_state, 'current_stage', 'unknown'),
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'previous_task_output': st.session_state.task_outputs.get(
+                st.session_state.current_stage, None
+            ),
+            'related_queries': [
+                q['query'] for q in st.session_state.search_queries.get(
+                    st.session_state.current_stage, []
+                )
+            ]
+        }
+        
+        result = super()._run(query)
+        
+        # Store enhanced query info
+        query_info = {
+            'query': query,
+            'context': context,
+            'result_summary': result[:500] + "..." if len(result) > 500 else result
+        }
+        
+        if context['stage'] in st.session_state.search_queries:
+            st.session_state.search_queries[context['stage']].append(query_info)
+            
+        # Process citations as before with enhanced context
+        try:
+            self._process_citations(query, result, context)
+        except Exception as e:
+            print(f"Error processing citations: {e}")
+            
+        return result
+
+    def _process_citations(self, query, result, context):
+        import json
+        data = json.loads(self.search.results(query))
+        citations = []
+        
+        if 'organic' in data:
+            for item in data['organic']:
+                citation = {
+                    'query': query,
+                    'title': item.get('title', ''),
+                    'link': item.get('link', ''),
+                    'snippet': item.get('snippet', ''),
+                    'stage': context['stage'],
+                    'timestamp': context['timestamp'],
+                    'context': context
+                }
+                citations.append(citation)
+        
+        if 'citations' not in st.session_state:
+            st.session_state.citations = {}
+        
+        st.session_state.citations[query] = citations
+
+class CitationTrackingSerperTool(SerperDevTool):
+    def _run(self, query: str) -> str:
+        result = super()._run(query)
+        
+        # Track the current stage and query
+        current_stage = getattr(st.session_state, 'current_stage', 'unknown')
+        
+        # Store query in session state
+        if current_stage in st.session_state.search_queries:
+            st.session_state.search_queries[current_stage].append({
+                'query': query,
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
+        
+        # Extract citations from the result
+        try:
+            import json
+            data = json.loads(self.search.results(query))
+            citations = []
+            
+            # Extract organic search results
+            if 'organic' in data:
+                for item in data['organic']:
+                    citation = {
+                        'query': query,
+                        'title': item.get('title', ''),
+                        'link': item.get('link', ''),
+                        'snippet': item.get('snippet', ''),
+                        'stage': current_stage,
+                        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    citations.append(citation)
+            
+            # Store citations in session state
+            if 'citations' not in st.session_state:
+                st.session_state.citations = {}
+            
+            if query not in st.session_state.citations:
+                st.session_state.citations[query] = citations
+                
+        except Exception as e:
+            print(f"Error tracking citations: {e}")
+            
+        return result
+
 class DesignThinkingCrew:
     """Design Thinking crew for user-centered problem solving with feedback loops"""
     
-    def __init__(self, api_keys: Dict[str, str], model_name: str = "gemini/gemini-2.0-flash"):
+    def __init__(self, api_keys: Dict[str, str], model_name: str = ""):
         """Initialize the Design Thinking Crew with necessary API keys and model selection"""
         # Set Serper API key in environment
         os.environ["SERPER_API_KEY"] = api_keys.get("serper")
         
         # Initialize LLM based on selected model
-        if "deepseek" in model_name.lower():
+        if "claude" in model_name.lower():
+            self.llm = LLM(
+                model=model_name,  # anthropic/claude-3-7-sonnet-20250219
+                api_key=api_keys.get("claude")
+            )
+        elif "groq" in model_name.lower():
+            self.llm = LLM(
+                model=model_name,  # groq/deepseek-r1-distill-llama-70b
+                api_key=api_keys.get("groq")
+            )
+
+        elif "deepseek" in model_name.lower():
             self.llm = LLM(
                 model=model_name,  # openrouter/deepseek/deepseek-r1
                 base_url="https://openrouter.ai/api/v1",
@@ -369,7 +563,59 @@ class DesignThinkingCrew:
             "Design Thinking Process Manager": self.manager_agent,
             "Design Process Reporter": self.reporting_agent
         }
-        
+def generate_enhanced_research_report():
+    report = "# Design Thinking Research Report\n\n"
+    
+    # Executive Summary
+    report += "## Executive Summary\n"
+    report += f"Research conducted across {sum(1 for queries in st.session_state.search_queries.values() if queries)} stages "
+    report += f"with {sum(len(queries) for queries in st.session_state.search_queries.values())} total queries.\n\n"
+    
+    # Research Methodology
+    report += "## Research Methodology\n\n"
+    for stage, queries in st.session_state.search_queries.items():
+        if queries:
+            report += f"### {stage.capitalize()} Stage\n\n"
+            report += f"**Number of Queries:** {len(queries)}\n\n"
+            report += "#### Key Research Questions:\n"
+            for query in queries:
+                report += f"- {query['query']}\n"
+                if query['query'] in st.session_state.citations:
+                    report += "  Key findings:\n"
+                    for citation in st.session_state.citations[query['query']][:3]:
+                        report += f"  - {citation['title']}\n"
+            report += "\n"
+    
+    # Source Analysis
+    report += "## Source Analysis\n\n"
+    domain_analysis = {}
+    for citations in st.session_state.citations.values():
+        for citation in citations:
+            domain = urlparse(citation['link']).netloc
+            if domain not in domain_analysis:
+                domain_analysis[domain] = {
+                    'count': 0,
+                    'titles': set(),
+                    'stages': set()
+                }
+            domain_analysis[domain]['count'] += 1
+            domain_analysis[domain]['titles'].add(citation['title'])
+            domain_analysis[domain]['stages'].add(citation['stage'])
+    
+    # Add domain analysis to report
+    for domain, analysis in sorted(domain_analysis.items(), 
+                                 key=lambda x: x[1]['count'], 
+                                 reverse=True):
+        report += f"### {domain}\n"
+        report += f"- Referenced {analysis['count']} times\n"
+        report += f"- Used in stages: {', '.join(sorted(analysis['stages']))}\n"
+        report += "- Key articles:\n"
+        for title in list(analysis['titles'])[:3]:
+            report += f"  - {title}\n"
+        report += "\n"
+    
+    return report
+
 def run_task(self, task_name, task, project_input, context_tasks=None, pdf_contents=None):
     """Run a single task and return its result"""
     try:
@@ -466,6 +712,29 @@ def extract_text_from_pdf(pdf_file):
         st.error(f"Error extracting text from PDF: {e}")
         return f"[Error extracting PDF content: {str(e)}]"
 
+def prepare_research_summary():
+    summary = "\n## Research Methodology\n\n"
+    summary += "### Search Queries by Stage\n\n"
+    
+    for stage, queries in st.session_state.search_queries.items():
+        if queries:
+            summary += f"\n#### {stage.capitalize()} Stage Queries:\n"
+            for q in queries:
+                summary += f"- {q['timestamp']}: `{q['query']}`\n"
+    
+    summary += "\n### Referenced Sources\n\n"
+    seen_links = set()
+    for query, citations in st.session_state.citations.items():
+        summary += f"\nSources for query: `{query}`\n"
+        for citation in citations:
+            if citation['link'] not in seen_links:
+                summary += f"- [{citation['title']}]({citation['link']})\n"
+                summary += f"  - Stage: {citation['stage']}\n"
+                summary += f"  - Time: {citation['timestamp']}\n"
+                summary += f"  - Context: _{citation['snippet']}_\n\n"
+                seen_links.add(citation['link'])
+    
+    return summary
 
 # Define task definitions globally so it can be accessed by multiple functions
 def get_task_definitions(session_state):
@@ -779,102 +1048,196 @@ def get_task_definitions(session_state):
         },
         "decisions": {
             "name": "Decision Archaeology",
-            "description": f"""Document and analyze key decisions throughout the design process for: {session_state.project_input['challenge']}
+            "description": f"""Document and analyze the decision-making process throughout the design thinking journey for: {st.session_state.project_input['challenge']}
 
-            METHODOLOGY REQUIREMENTS:
-            1. Decision Mapping
-                - Track key decision points
-                - Document rationales
-                - Analyze impact
+            COMPREHENSIVE DECISION ANALYSIS REQUIREMENTS:
+
+            1. Agent Decision Making Process
+                - Document each agent's key decisions
+                - Analyze decision rationale and methodology
+                - Map the decision trees and alternative paths considered
+                - Identify critical decision points and their impact
             
-            2. Learning Documentation
-                - Capture insights
-                - Record adaptations
-                - Track evolution
+            2. Cross-Stage Decision Flow
+                - Track how decisions in each stage influenced subsequent stages
+                - Document information flow between stages
+                - Analyze the ripple effects of key decisions
+                - Map dependencies between stage decisions
             
-            3. Pattern Analysis
-                - Identify trends
-                - Map connections
-                - Synthesize learnings
+            3. Manager Coordination Analysis
+                - Document how the manager agent coordinated decisions
+                - Analyze the effectiveness of inter-agent communication
+                - Map the delegation and task distribution process
+                - Evaluate the manager's role in decision optimization
             
-            4. Impact Assessment
-                - Evaluate outcomes
-                - Measure effectiveness
-                - Track progress
+            4. Decision Rationale Documentation
+                - Capture detailed reasoning behind each major decision
+                - Document alternative options considered
+                - Analyze trade-offs and their implications
+                - Track how user needs influenced decisions
             
-            5. Knowledge Management
-                - Organize findings
-                - Structure insights
-                - Plan application
+            5. Context Integration Analysis
+                - Document how context was passed between stages
+                - Analyze how each stage built upon previous decisions
+                - Map the evolution of understanding across stages
+                - Track how insights influenced decision-making
+
+            PREVIOUS STAGE OUTPUTS AND DECISIONS:
+            {chr(10).join([f"## {stage.upper()} STAGE DECISIONS:" + st.session_state.task_outputs.get(stage, "No output available") for stage in st.session_state.completed_tasks])}
 
             CONTEXTUAL CONSIDERATIONS:
-            - Challenge Context: {session_state.project_input['context']}
-            - Key Constraints: {str(session_state.project_input['constraints'])}
+            - Challenge Context: {st.session_state.project_input['context']}
+            - Key Constraints: {str(st.session_state.project_input['constraints'])}
             
             EXPECTED DELIVERABLES:
-            1. Decision Matrix
-            2. Learning Framework
-            3. Pattern Map
-            4. Impact Analysis
-            5. Knowledge Base""",
+            1. Comprehensive Decision Journey Map
+            2. Agent Decision Rationale Analysis
+            3. Cross-Stage Impact Assessment
+            4. Manager Coordination Report
+            5. Context Flow Documentation""",
+            "expected_output": """Provide a structured analysis including:
 
-            "expected_output": """1. Decision Impact Network:
-            - Ripple effect visualization
-            - Opportunity cost analysis
-            2. Pivot Point Analysis:
-            - Critical junctures
-            - Paths not taken
-            3. Cognitive Bias Audit:
-            - Anchoring effects
-            - Confirmation tendency checks
-            4. Team Mindset Evolution:
-            - Paradigm shifts
-            - Assumption mortality rate""",
-            "agent": session_state.crew.reporting_agent,
+            1. Decision Journey Map:
+                - Chronological mapping of key decisions
+                - Decision points and their rationale
+                - Alternative paths considered
+                - Impact assessment of each decision
+
+            2. Agent Decision Analysis:
+                - Each agent's decision-making process
+                - Rationale documentation
+                - Methodology explanation
+                - Impact evaluation
+
+            3. Cross-Stage Analysis:
+                - Information flow between stages
+                - Decision dependencies
+                - Ripple effects
+                - Evolution of understanding
+
+            4. Manager Coordination Report:
+                - Task distribution strategy
+                - Communication protocols
+                - Conflict resolution methods
+                - Resource allocation decisions
+
+            5. Context Integration Analysis:
+                - Knowledge transfer between stages
+                - Context utilization documentation
+                - Insight application tracking
+                - Decision influence mapping""",
+            "agent": st.session_state.crew.reporting_agent,
             "show_file_upload": False
         },
         "report": {
             "name": "Final Report",
-            "description": """Create a comprehensive markdown report documenting the entire
-            design thinking process. Include insights and outcomes from each stage.""",
+            "description": f"""Create a comprehensive markdown report documenting the entire
+            design thinking process. Include insights, outcomes, and research methodology from each stage.
+            
+            RESEARCH METHODOLOGY AND SOURCES:
+            {prepare_research_summary()}
+            
+            Please incorporate relevant research queries and citations throughout the report where appropriate.""",
             "expected_output": """A detailed markdown report including:
-            1. Innovation Story Arc:
-            - Tension points
-            - Breakthrough moments
-            2. Evidence Web:
-            - Research-problem-solution connections
-            - Quant-qual triangulation
-            3. Future Evolution Map:
-            - Solution lifecycle projection
-            - Adjacent application spaces
-            4. Learning Harvest:
-            - Process innovations
-            - Unexpected insights utility
             1. Executive Summary
-            2. User Research Findings
-            3. Problem Definition
-            4. Ideation Process and Solutions
-            5. Prototype Details
-            6. Testing Results and Recommendations
-            7. Next Steps""",
-            "agent": session_state.crew.reporting_agent,
+            2. Research Methodology
+                - Search queries used in each stage
+                - Key information sources
+                - Research timeline
+            3. User Research Findings
+            4. Problem Definition
+            5. Ideation Process and Solutions
+            6. Prototype Details
+            7. Testing Results and Recommendations
+            8. Next Steps
+            9. References and Citations
+                - Comprehensive list of all sources
+                - Search queries that led to key insights
+                - Source credibility assessment
+            """,
+            "agent": st.session_state.crew.reporting_agent,
             "show_file_upload": False
         },
-        "manager_briefing_task" : {
+        "manager_briefing_task": {
             "name": "Manager Briefing",
-            "description" : f"""IMPORTANT: Review and understand the design challenge before coordinating other agents.
-    
-            DESIGN CHALLENGE: {st.session_state.project_input['challenge']}
-            
-            CONTEXT: {st.session_state.project_input['context']}
-            
-            CONSTRAINTS: {str(st.session_state.project_input['constraints'])}
-            
-            Your job is to ensure all agents focus their work specifically on this challenge, context, and constraints.
-            When coordinating their work, continually remind them to refer back to these project parameters.
+            "description": f"""COMPREHENSIVE COORDINATION AND OVERSIGHT REPORT
+
+            DESIGN CHALLENGE PARAMETERS:
+            Challenge: {st.session_state.project_input['challenge']}
+            Context: {st.session_state.project_input['context']}
+            Constraints: {str(st.session_state.project_input['constraints'])}
+            Main POV: {st.session_state.main_pov if 'main_pov' in st.session_state else "Not yet defined"}
+
+            COORDINATION REQUIREMENTS:
+
+            1. Stage Coordination Strategy
+                - Document how each stage was coordinated
+                - Explain context passing between stages
+                - Detail agent collaboration protocols
+                - Track information flow and dependencies
+
+            2. Resource Management
+                - Document how resources were allocated
+                - Explain task prioritization decisions
+                - Detail workload distribution
+                - Track efficiency optimization methods
+
+            3. Quality Control Measures
+                - Document review and validation processes
+                - Explain error correction protocols
+                - Detail quality assurance methods
+                - Track performance optimization efforts
+
+            4. Communication Framework
+                - Document inter-agent communication protocols
+                - Explain information sharing methods
+                - Detail conflict resolution approaches
+                - Track collaboration effectiveness
+
+            5. Process Optimization
+                - Document workflow improvements
+                - Explain efficiency enhancements
+                - Detail bottleneck resolution
+                - Track overall process effectiveness
+
+            PROVIDE DETAILED DOCUMENTATION OF:
+            - How each stage built upon previous stages
+            - How context was maintained and transferred
+            - How agent collaboration was facilitated
+            - How challenges were addressed and resolved
             """,
-            "expected_output" : "Confirmation of understanding the design challenge and plan for coordination",
-            "agent" : st.session_state.crew.manager_agent
+            "expected_output": """Provide a comprehensive management report including:
+
+            1. Coordination Strategy:
+                - Stage-by-stage coordination approach
+                - Context management methods
+                - Agent collaboration protocols
+                - Information flow optimization
+
+            2. Resource Allocation:
+                - Task distribution methodology
+                - Priority management approach
+                - Efficiency optimization methods
+                - Performance tracking metrics
+
+            3. Quality Assurance:
+                - Validation processes
+                - Error prevention methods
+                - Quality control protocols
+                - Performance optimization results
+
+            4. Communication Management:
+                - Inter-agent communication framework
+                - Information sharing protocols
+                - Conflict resolution methods
+                - Collaboration effectiveness metrics
+
+            5. Process Optimization:
+                - Workflow improvements implemented
+                - Efficiency enhancements achieved
+                - Challenge resolution methods
+                - Overall process effectiveness analysis""",
+            "agent": st.session_state.crew.manager_agent
         }
     
     }
@@ -907,8 +1270,13 @@ def init_session_state():
             "gemini": "",
             "serper": "",
             "openai": "",
-            "deepseek": ""
+            "deepseek": "",
+            "claude": "",
+            "groq": ""
         }
+        
+    if 'main_pov' not in st.session_state:
+        st.session_state.main_pov = ""
         
     if 'model_name' not in st.session_state:
         st.session_state.model_name = "gemini/gemini-2.0-flash-thinking-exp-01-21"
@@ -925,8 +1293,19 @@ def init_session_state():
     if 'process_logs' not in st.session_state:
         st.session_state.process_logs = []
     
-    if 'active_tab_index' not in st.session_state:
-        st.session_state.active_tab_index = 0
+    if 'search_queries' not in st.session_state:
+        st.session_state.search_queries = {
+            'empathize': [],
+            'define': [],
+            'ideate': [],
+            'prototype': [],
+            'test': [],
+            'decisions': [],
+            'report': []
+        }
+    
+    if 'citations' not in st.session_state:
+        st.session_state.citations = {}
 
 # Functions for the Streamlit UI
 def setup_api_keys():
@@ -934,21 +1313,27 @@ def setup_api_keys():
     
     gemini_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.api_keys.get("gemini", ""), type="password")
     serper_key = st.sidebar.text_input("Serper API Key", value=st.session_state.api_keys.get("serper", ""), type="password")
+    claude_key = st.sidebar.text_input("Claude API Key", value=st.session_state.api_keys.get("claude", ""), type="password")
+    groq_key = st.sidebar.text_input("Groq API Key", value=st.session_state.api_keys.get("groq", ""), type="password")
     openai_key = st.sidebar.text_input("OpenAI API Key (Optional)", value=st.session_state.api_keys.get("openai", ""), type="password")
     deepseek_key = st.sidebar.text_input("DeepSeek API Key (Optional)", value=st.session_state.api_keys.get("deepseek", ""), type="password")
     
     st.session_state.api_keys = {
         "gemini": gemini_key,
         "serper": serper_key,
+        "claude": claude_key,
+        "groq": groq_key,
         "openai": openai_key,
         "deepseek": deepseek_key
     }
     
     # Model selection
     model_options = {
-        "Gemini 2.0 Flash Thinking": "gemini/gemini-2.0-flash-thinking-exp-01-21",
-        "DeepSeek Reasoner": "openrouter/deepseek/deepseek-r1",
-        "OpenAI GPT-4": "gpt-4"
+        "Gemini 2.0 Flash": "gemini/gemini-2.0-flash",     #-thinking-exp-01-21
+        "Claude 3.7 Sonnet": "anthropic/claude-3-7-sonnet-20250219",
+        "Groq DeepSeek Llama 70B": "groq/deepseek-r1-distill-qwen-32b",  #deepseek-r1-distill-llama-70b",
+        "DeepSeek Reasoner": "openrouter/nvidia/llama-3.1-nemotron-70b-instruct", 
+        "OpenAI o3-mini": "openai/o3-mini"
     }
     
     selected_model = st.sidebar.selectbox(
@@ -1128,10 +1513,62 @@ def setup_challenge():
                 with st.spinner("Analyzing context and extracting challenge..."):
                     constraints_list = [c.strip() for c in constraints.split("\n") if c.strip()]
                     try:
+                        # Create a context analysis agent and analyze the context
+                        context_analysis_agent = Agent(
+                            role="Context Analyst",
+                            goal="Analyze context to identify key challenges and opportunities",
+                            backstory="You excel at reading between the lines to identify core problems that need addressing.",
+                            tools=[st.session_state.crew.search_tool],
+                            verbose=True,
+                            llm=st.session_state.crew.llm
+                        )
+                        
+                        context_analysis_task = Task(
+                            description=f"Analyze the following context to identify challenges: \n\n{context}",
+                            expected_output="Analysis with domain identification and challenge statement",
+                            agent=context_analysis_agent
+                        )
+                        
+                        # Define manager briefing task directly
+                        manager_briefing_task = Task(
+                            description=f"""IMPORTANT: Review and understand this context.
+                            
+                            CONTEXT: {context}
+                            
+                            Your job is to help identify the domain and potential challenges in this context.
+                            """,
+                            expected_output="Confirmation of understanding the context",
+                            agent=st.session_state.crew.manager_agent
+                        )
+                        
+                        # Run the briefing task first
+                        briefing_crew = Crew(
+                            agents=[st.session_state.crew.manager_agent],
+                            tasks=[manager_briefing_task],
+                            verbose=True
+                        )
+
+                        briefing_result = briefing_crew.kickoff()
+
+                        analysis_crew = Crew(
+                            agents=[context_analysis_agent],
+                            tasks=[context_analysis_task],
+                            verbose=True
+                        )
+                        
+                        analysis_result = analysis_crew.kickoff()
+                        
+                        # Extract domain from analysis
+                        try:
+                            domain_section = analysis_result.raw.split('# DOMAIN IDENTIFICATION')[1].split('#')[0].strip()
+                        except:
+                            domain_section = "General Design"
+                            
+                        # Generate full challenge with the domain we've determined
                         st.session_state.project_input = st.session_state.crew.generate_challenge(
-                        domain=domain_section,
-                        context=context,
-                        constraints=constraints_list if constraints_list else None
+                            domain=domain_section,
+                            context=context,
+                            constraints=constraints_list if constraints_list else None
                         )
                         st.success("Challenge extracted successfully!")
                         
@@ -1152,53 +1589,6 @@ def setup_challenge():
                             </script>
                             """, height=0)
                             st.rerun()
-                        
-                        # Create a context analysis agent and analyze the context
-                        context_analysis_agent = Agent(
-                            role="Context Analyst",
-                            goal="Analyze context to identify key challenges and opportunities",
-                            backstory="You excel at reading between the lines to identify core problems that need addressing.",
-                            tools=[st.session_state.crew.search_tool],
-                            verbose=True,
-                            llm=st.session_state.crew.llm
-                        )
-                        
-                        context_analysis_task = Task(
-                            description=f"Analyze the following context to identify challenges: \n\n{context}",
-                            expected_output="Analysis with domain identification and challenge statement",
-                            agent=context_analysis_agent
-                        )
-                        
-                        # Run the briefing task first
-                        briefing_crew = Crew(
-                            agents=[st.session_state.crew.manager_agent],
-                            tasks=[st.session_state.crew.manager_briefing_task],
-                            verbose=True
-                        )
-
-                        briefing_result = briefing_crew.kickoff()
-
-                        analysis_crew = Crew(
-                            agents=[context_analysis_agent],
-                            tasks=[context_analysis_task],
-                            verbose=True
-                        )
-                        
-                        analysis_result = analysis_crew.kickoff()
-                        
-                        # Extract domain from analysis
-                        try:
-                            domain_section = analysis_result.raw.split('# DOMAIN IDENTIFICATION')[1].split('#')[0].strip()
-                        except:
-                            domain_section = "General Design"
-                            
-                        # Generate full challenge
-                        st.session_state.project_input = st.session_state.crew.generate_challenge(
-                            domain=domain_section,
-                            context=context,
-                            constraints=constraints_list if constraints_list else None
-                        )
-                        st.success("Challenge extracted successfully!")
 
                     except Exception as e:
                         st.error(f"Error extracting challenge: {e}")
@@ -1285,6 +1675,44 @@ def generate_agent_response(user_input, stage_name, agent_role):
         return result.raw
     except Exception as e:
         return f"I'm sorry, I encountered an error while generating a response: {str(e)}"
+
+def display_research_analytics():
+    st.subheader("Research Analytics")
+    
+    # Create metrics section
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        total_queries = sum(len(queries) for queries in st.session_state.search_queries.values())
+        st.metric("Total Search Queries", total_queries)
+    
+    with col2:
+        total_sources = len({citation['link'] 
+                           for citations in st.session_state.citations.values() 
+                           for citation in citations})
+        st.metric("Unique Sources", total_sources)
+    
+    with col3:
+        stages_with_research = sum(1 for queries in st.session_state.search_queries.values() if queries)
+        st.metric("Stages with Research", f"{stages_with_research}/5")
+
+    # Create query analysis by stage
+    st.subheader("Research Distribution by Stage")
+    stage_data = {stage: len(queries) for stage, queries in st.session_state.search_queries.items()}
+    st.bar_chart(stage_data)
+
+    # Show top domains referenced
+    st.subheader("Top Referenced Domains")
+    domain_counts = {}
+    for citations in st.session_state.citations.values():
+        for citation in citations:
+            from urllib.parse import urlparse
+            domain = urlparse(citation['link']).netloc
+            domain_counts[domain] = domain_counts.get(domain, 0) + 1
+    
+    # Sort and display top domains
+    sorted_domains = sorted(domain_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+    for domain, count in sorted_domains:
+        st.write(f"- {domain}: {count} references")
 
 def run_design_thinking_process():
     if not st.session_state.project_input:
@@ -1462,48 +1890,78 @@ def run_design_thinking_process():
             if stage == "test" and "prototype" in st.session_state.completed_tasks and "prototype" in st.session_state.task_outputs:
                 st.subheader("Select Prototyped Solutions to Test")
                 
-                # Get solutions from prototype stage if available, otherwise parse from prototype output
+                # Get solutions from prototype stage if available
+                prototype_solutions = []
+                
+                # First try to get from selected solutions
                 if "selected_solutions" in st.session_state and "prototype" in st.session_state.selected_solutions:
-                    # Use the solutions that were selected for prototyping
                     prototype_solutions = st.session_state.selected_solutions["prototype"]
-                else:
-                    # Parse prototype output to extract prototyped solutions
+                
+                # If no selected solutions, try to parse from prototype output
+                if not prototype_solutions:
                     prototype_output = st.session_state.task_outputs["prototype"]
                     
-                    # Try to extract prototyped solutions
+                    # Try to extract prototyped solutions using multiple methods
                     import re
-                    prototype_solutions = []
                     
-                    # Look for prototype names, features, specifications
+                    # Look for solution headers with different patterns
                     patterns = [
                         r'(?:Prototype\s*\d+:?\s*)(.*?)(?=Prototype|$)',  # Prototype headers
-                        r'(?:\d+\.\s*)(.*?)(?=\d+\.|$)',  # Numbered lists
-                        r'(?:Feature\s*\d+:?\s*)(.*?)(?=Feature|$)'  # Feature headers
+                        r'(?:Solution\s*\d+:?\s*)(.*?)(?=Solution|$)',    # Solution headers
+                        r'(?:\d+\.\s*)(.*?)(?=\d+\.|$)',                 # Numbered lists
+                        r'(?:\*\s*)(.*?)(?=\*|$)'                        # Bullet points
                     ]
                     
                     for pattern in patterns:
                         found_solutions = re.findall(pattern, prototype_output, re.DOTALL)
                         if found_solutions:
                             # Clean up solutions
-                            cleaned_solutions = [solution.strip() for solution in found_solutions if solution.strip()]
+                            cleaned_solutions = []
+                            for solution in found_solutions:
+                                # Clean up the solution text
+                                cleaned = solution.strip()
+                                # Remove any markdown formatting
+                                cleaned = re.sub(r'[#*_`]', '', cleaned)
+                                # Limit length and add if not empty
+                                if cleaned and len(cleaned) > 5:  # Minimum length check
+                                    if len(cleaned) > 200:
+                                        cleaned = cleaned[:197] + "..."
+                                    cleaned_solutions.append(cleaned)
+                            
                             if cleaned_solutions:
-                                prototype_solutions.extend(cleaned_solutions)
+                                prototype_solutions = cleaned_solutions
                                 break
                 
-                # Initialize selected test solutions
-                if "selected_test_solutions" not in st.session_state:
-                    st.session_state.selected_test_solutions = {}
+                # If still no solutions found, provide default
+                if not prototype_solutions:
+                    st.warning("No prototype solutions could be automatically extracted. Please enter them manually.")
+                    manual_input = st.text_area("Enter prototype solutions (one per line):")
+                    if manual_input:
+                        prototype_solutions = [s.strip() for s in manual_input.split('\n') if s.strip()]
                 
-                # Show checkboxes for each prototyped solution
-                selected_test_solutions = []
+                # Display solutions for selection
                 if prototype_solutions:
+                    st.write("Select prototypes to test:")
+                    selected_test_solutions = []
                     for i, solution in enumerate(prototype_solutions):
-                        # Truncate if solution is too long
-                        display_solution = solution[:200] + "..." if len(solution) > 200 else solution
-                        if st.checkbox(display_solution, key=f"test_solution_{i}", value=True):  # Default selected
+                        if st.checkbox(f"Test: {solution}", key=f"test_solution_{i}", value=True):
                             selected_test_solutions.append(solution)
+                    
+                    # Store selected solutions
+                    if "selected_test_solutions" not in st.session_state:
+                        st.session_state.selected_test_solutions = {}
+                    st.session_state.selected_test_solutions[stage] = selected_test_solutions
+                    
+                    # Add selected solutions to task description
+                    if selected_test_solutions:
+                        task_description += "\n\nSELECTED PROTOTYPES TO TEST:\n"
+                        for i, sol in enumerate(selected_test_solutions, 1):
+                            task_description += f"{i}. {sol}\n"
+                        
+                        # Make sure this is prominently displayed
+                        st.info(f"You've selected {len(selected_test_solutions)} prototypes for testing")
                 else:
-                    st.warning("No prototyped solutions found. Please complete the prototype stage first.")
+                    st.error("No prototypes available for testing. Please complete the prototype stage first.")
                 
                 # Store selected solutions for testing
                 st.session_state.selected_test_solutions[stage] = selected_test_solutions
@@ -1523,11 +1981,57 @@ def run_design_thinking_process():
             if stage in st.session_state.completed_tasks:
                 st.success("Task completed!")
                 with st.expander("Task Output", expanded=True):
-                    # Clean and render the markdown properly
                     output_text = st.session_state.task_outputs.get(stage, "No output available")
                     cleaned_output = output_text.replace("```markdown", "").replace("```", "")
                     st.markdown(cleaned_output)
+                    
+                    try:
+                        # Add PDF download button
+                        pdf_bytes = create_pdf_from_markdown(cleaned_output, f"{task_definitions[stage]['name']} Output")
+                        st.download_button(
+                            label="📄 Download PDF Report",
+                            data=pdf_bytes,
+                            file_name=f"{stage}_report.pdf",
+                            mime="application/pdf",
+                            key=f"pdf_download_{stage}"
+                        )
+                    except Exception as e:
+                        st.error(f"Could not generate PDF. Error: {str(e)}")
                 
+                    # Show research queries for this stage
+                    if st.session_state.search_queries.get(stage):
+                        with st.expander("View Research Queries", expanded=False):
+                            st.markdown("### Search Queries Used in This Stage")
+                            for query_info in st.session_state.search_queries[stage]:
+                                st.markdown(f"""
+                                - Time: {query_info['timestamp']}
+                                Query: `{query_info['query']}`
+                                """)
+                                
+                                # Show citations for this query
+                                if query_info['query'] in st.session_state.citations:
+                                    st.markdown("  Sources found:")
+                                    for citation in st.session_state.citations[query_info['query']]:
+                                        st.markdown(f"""
+                                        > - [{citation['title']}]({citation['link']})
+                                        >   _{citation['snippet']}_
+                                        """)
+
+                # Show Main POV input after Empathize stage completion
+                if stage == "empathize":
+                    st.subheader("Define Main Point of View")
+                    st.info("Now that we've gathered empathy insights, please define the main point of view that will guide the rest of the process.")
+                    main_pov = st.text_area(
+                        "Main Point of View",
+                        value=st.session_state.main_pov,
+                        help="This perspective will be carried through all subsequent stages",
+                        key="main_pov_after_empathize"
+                    )
+                    if main_pov != st.session_state.main_pov:
+                        st.session_state.main_pov = main_pov
+                        st.success("Main POV updated!")
+
+
                 # Display any previous feedback
                 if stage in st.session_state.human_feedback:
                     with st.expander("Previous Feedback"):
@@ -1564,6 +2068,8 @@ def run_design_thinking_process():
                     
                     ---
                     """)
+                    
+                        
                 elif stage == "define":
                     st.markdown("""
                     ### About the Problem Definition Specialist
@@ -1686,7 +2192,9 @@ def run_design_thinking_process():
                                 
                                 CONSTRAINTS: {str(st.session_state.project_input['constraints'])}
                                 
-                                Your job is to ensure all agents focus their work specifically on this challenge, context, and constraints.
+                                MAIN POINT OF VIEW: {st.session_state.main_pov if 'main_pov' in st.session_state and st.session_state.main_pov else "No specific POV provided."}
+                                
+                                Your job is to ensure all agents focus their work specifically on this challenge, context, constraints, and maintain the main point of view.
                                 When coordinating their work, continually remind them to refer back to these project parameters.
                                 """,
                                 expected_output="Confirmation of understanding the design challenge and plan for coordination",
@@ -1788,19 +2296,47 @@ def run_design_thinking_process():
                                         })
                                 
                             elif stage == "report":
+                                # First add all completed tasks
                                 for name in st.session_state.completed_tasks:
                                     if name in st.session_state.task_outputs:
                                         context_tasks.append({
                                             "stage": name,
                                             "output": st.session_state.task_outputs[name]
                                         })
+                                
+                                # Add research methodology and citations
+                                research_summary = "\n\n## Research Methodology and Sources\n\n"
+                                
+                                # Add queries by stage
+                                for stage_name, queries in st.session_state.search_queries.items():
+                                    if queries:
+                                        research_summary += f"\n### {stage_name.capitalize()} Stage Research\n"
+                                        for query_info in queries:
+                                            research_summary += f"- Search Query: `{query_info['query']}`\n"
+                                            # Add citations for this query
+                                            if query_info['query'] in st.session_state.citations:
+                                                research_summary += "  Sources:\n"
+                                                for citation in st.session_state.citations[query_info['query']]:
+                                                    research_summary += f"  - [{citation['title']}]({citation['link']})\n"
+                                                    research_summary += f"    - {citation['snippet']}\n"
+                                
+                                # Add research summary to context
+                                context_tasks.append({
+                                    "stage": "research_methodology",
+                                    "output": research_summary
+                                })
                             
-                            # Add the context from previous tasks to the task description
+
                             # Add the context from previous tasks to the task description
                             if context_tasks and len(context_tasks) > 0:
                                 task_description += "\n\nPREVIOUS STAGES OUTPUTS:\n"
                                 for context in context_tasks:
                                     task_description += f"\n## {context['stage'].upper()} STAGE OUTPUT:\n{context['output']}\n"
+                                
+                            # Add Main POV to context information for all stages
+                            if 'main_pov' in st.session_state and st.session_state.main_pov:
+                                task_description += f"\n\nMAIN POINT OF VIEW: {st.session_state.main_pov}\n"
+                                task_description += "This POV should be the lens through which you approach this stage of the design thinking process."
                             
                             # Extract any manager logs/interactions for process logs
                             manager_logs = []
@@ -1829,8 +2365,24 @@ def run_design_thinking_process():
                                     truncated_content = content[:8000] + "..." if len(content) > 8000 else content
                                     task_description += f"\nPDF DOCUMENT {i+1}:\n{truncated_content}\n\n"
                             
-                            # Ensure the design challenge, context, and constraints are prominently included
-                            task_description = f"""IMPORTANT: Focus on this specific design challenge, context, and constraints.
+                            # Ensure the design challenge, context, constraints, and Main POV are prominently included
+                            if 'main_pov' in st.session_state and st.session_state.main_pov:
+                                task_description = f"""IMPORTANT: Focus on this specific design challenge, context, and constraints.
+
+                            DESIGN CHALLENGE: {st.session_state.project_input['challenge']}
+
+                            CONTEXT: {st.session_state.project_input['context']}
+
+                            CONSTRAINTS: {str(st.session_state.project_input['constraints'])}
+
+                            MAIN POINT OF VIEW: {st.session_state.main_pov}
+                            This POV should drive your thinking throughout this task.
+
+                            TASK INSTRUCTIONS:
+                            {task_description}
+                            """
+                            else:
+                                task_description = f"""IMPORTANT: Focus on this specific design challenge, context, and constraints.
 
                             DESIGN CHALLENGE: {st.session_state.project_input['challenge']}
 
@@ -1844,23 +2396,30 @@ def run_design_thinking_process():
                             
                             # Special handling for prototype stage - make sure all selected solutions are emphasized
                             if stage == "prototype" and "selected_solutions" in st.session_state and "prototype" in st.session_state.selected_solutions:
-                                selected_sols = st.session_state.selected_solutions["prototype"]
-                                if selected_sols:
-                                    task_description += f"""
-                                    \n\nIMPORTANT: You MUST create detailed prototype descriptions for ALL {len(selected_sols)} 
-                                    selected solutions listed below. Each solution must be given equal attention and detail.
-                                    
-                                    SELECTED SOLUTIONS TO PROTOTYPE:
-                                    {chr(10).join([f"{i+1}. {sol}" for i, sol in enumerate(selected_sols)])}
-                                    
-                                    For each solution above, provide:
-                                    - Detailed prototype specifications
-                                    - Core features
-                                    - Development approach
-                                    - Implementation considerations
-                                    
-                                    DO NOT focus on just one solution - you must prototype ALL {len(selected_sols)} selected solutions.
-                                    """
+                                solutions = st.session_state.selected_solutions.get("prototype", [])
+                                if solutions:
+                                    solution_text = "\n".join(f"Solution {i+1}: {sol}" for i, sol in enumerate(solutions))
+                                else:
+                                    solution_text = "No solutions selected"
+                                task_description += f"""
+
+                                \n\nIMPORTANT: You MUST create detailed prototype descriptions for ALL {len(solutions)} 
+                                selected solutions listed below. Each solution must be given equal attention and detail.
+                                
+                                SELECTED SOLUTIONS TO PROTOTYPE:
+                                {chr(10).join([f"{i+1}. {sol}" for i, sol in enumerate(solutions)])}
+                                
+                                For each solution above, provide:
+                                - Detailed prototype specifications
+                                - Core features
+                                - Development approach
+                                - Implementation considerations
+                                
+                                DO NOT focus on just one solution - you must prototype ALL {len(solutions)} selected solutions.
+
+                                Selected Solutions:
+                                 {solution_text}
+                                """
                             
                             # Special handling for test stage - make sure all selected prototypes are emphasized
                             if stage == "test" and "selected_test_solutions" in st.session_state and stage in st.session_state.selected_test_solutions:
@@ -1884,7 +2443,7 @@ def run_design_thinking_process():
                             
                             # Now create the task with the updated description
                             task = Task(
-                                description=task_description,
+                                description=sanitize_task_description(task_description),  # Add sanitize_task_description here
                                 expected_output=current_task_def["expected_output"],
                                 agent=current_task_def["agent"]
                             )
