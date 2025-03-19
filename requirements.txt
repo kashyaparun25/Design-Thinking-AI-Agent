@@ -1,6 +1,6 @@
-crewai
-crewai[tools]
-streamlit
+crewai==0.102.0
+crewai-tools==0.36.0
+streamlit==1.43.1
 chromadb<0.6.0
 pysqlite3-binary
 langchain<0.4.0
@@ -11,3 +11,5 @@ PyPDF2
 google-generativeai
 databricks
 databricks.sdk
+markdown
+fpdf
